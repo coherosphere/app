@@ -1,0 +1,1 @@
+export default function configured-icon() { return null; }
