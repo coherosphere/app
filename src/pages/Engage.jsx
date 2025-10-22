@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -9,6 +9,20 @@ import { useLoading } from '@/components/loading/LoadingContext';
 import { useCachedData } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from '@/components/StatCard';
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 const participationOptions = [
   {
@@ -52,7 +66,11 @@ const participationOptions = [
 export default function Engage() {
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
-  const [totalDonations, setTotalDonations] = useState(0);
+
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = useRef(null);
 
   // Progressive Loading States - sections load in parallel
   const [sectionsReady, setSectionsReady] = useState({
@@ -106,101 +124,210 @@ export default function Engage() {
     'engage'
   );
 
-  // Load donation data separately (uses checkApiStatus function)
-  const { data: apiData, isLoading: apiLoading } = useCachedData(
-    ['engage', 'donations'],
-    () => base44.functions.invoke('checkApiStatus', { source: 'engage_page' }),
+  // --- Daten laden für Stats ---
+  // 1. Stat Konfigurationen laden (alle)
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['engage', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
     'engage'
   );
 
-  const isLoading = messagesLoading || resourcesLoading || eventsLoading || projectsLoading || circlesLoading || apiLoading;
+  // 2. Stat Werte laden (alle)
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['engage', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'engage'
+  );
+
+  // 3. AppConfig für die Anzeigereihenfolge laden
+  const { data: appConfigList = [] } = useCachedData(
+    ['engage', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'engage'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Engage'] || appConfig?.stat_display_order || [];
+
+  const isLoading = messagesLoading || resourcesLoading || eventsLoading || projectsLoading || circlesLoading;
 
   // Sync loading state with global loading context
   useEffect(() => {
     setLoading(isLoading);
   }, [isLoading, setLoading]);
 
-  // Calculate total donations when API data changes
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für Engage-Seite filtern
+  const activeStatsForEngage = useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Engage')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder
+  const sortedStatConfigs = useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForEngage].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForEngage.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForEngage, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = useCallback((config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  }, []);
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik
   useEffect(() => {
-    if (!apiData?.data) return;
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length <= 1) return;
 
-    const BITCOIN_ADDRESS = "bc1q7davwh4083qrw8dsnazavamul4ngam99zt7nfy";
-    let totalReceived = 0;
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
 
-    const bitcoinTxs = apiData.data.bitcoinTransactions || [];
-    bitcoinTxs.forEach(tx => {
-      let received = 0;
-      let sent = 0;
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
 
-      tx.vout?.forEach((output) => {
-        if (output.scriptpubkey_address === BITCOIN_ADDRESS) {
-          received += output.value;
-        }
-      });
-
-      tx.vin?.forEach((input) => {
-        if (input.prevout?.scriptpubkey_address === BITCOIN_ADDRESS) {
-          sent += input.prevout.value;
-        }
-      });
-
-      const netAmount = received - sent;
-      if (netAmount > 0) {
-        totalReceived += netAmount;
-      }
-    });
-
-    const lightningTxs = apiData.data.lightningTransactions || [];
-    lightningTxs.forEach(tx => {
-      if (tx.type === 'incoming') {
-        totalReceived += tx.amount;
-      }
-    });
-
-    setTotalDonations(totalReceived);
-  }, [apiData]);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
 
   // Track when each section's data is ready (parallel loading)
   useEffect(() => {
-    // Stats ready when all data loaded
-    if (!messagesLoading && !resourcesLoading && !eventsLoading && !projectsLoading && !circlesLoading && !apiLoading) {
+    // Stats ready when data loaded and stats config available
+    if (!statsConfigLoading && !statsValuesLoading) {
       setSectionsReady(prev => ({ ...prev, stats: true }));
     }
-  }, [messagesLoading, resourcesLoading, eventsLoading, projectsLoading, circlesLoading, apiLoading]);
+  }, [statsConfigLoading, statsValuesLoading]);
 
   useEffect(() => {
     // Options always ready (static content, no data dependency)
     setSectionsReady(prev => ({ ...prev, options: true }));
   }, []);
 
-  // Compute stats from loaded data
-  const stats = {
-    messages: messages.length,
-    knowledge: resources.length,
-    events: events.length,
-    projects: projects.length,
-    circles: circles.length,
-    totalDonations: totalDonations,
+  // Render-Funktionen für Stat-Karten
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
   };
 
-  const statsConfig = [
-    { iconName: 'MessageSquare', value: stats.messages, label: 'Messages' },
-    { iconName: 'BookOpen', value: stats.knowledge, label: 'Knowledge' },
-    { iconName: 'Calendar', value: stats.events, label: 'Events' },
-    { iconName: 'Users', value: stats.circles, label: 'Circles' },
-    { iconName: 'Lightbulb', value: stats.projects, label: 'Projects' },
-    { iconName: 'TrendingUp', value: stats.totalDonations.toLocaleString(), label: 'Received (sats)' },
-  ];
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
 
   return (
     <div className="p-4 lg:p-8 text-white">
       {/* Header - ALWAYS VISIBLE with final content immediately */}
-      <motion.div 
-        className="mb-8"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8 }}
-      >
+      <div className="mb-8">
         <div className="flex items-center gap-4 mb-3">
           <ConfiguredIcon 
             iconName="Handshake" 
@@ -218,61 +345,87 @@ export default function Engage() {
         <p className="text-lg text-slate-400 leading-relaxed max-w-2xl mt-3">
           Connect, share, and contribute to coherosphere's collective knowledge.
         </p>
-      </motion.div>
+      </div>
 
-      {/* Stats Grid - Progressive Loading */}
-      {!sectionsReady.stats ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-12">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <Card key={i} className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded-lg mx-auto mb-1.5" />
-                <div className="h-6 bg-slate-700/30 animate-pulse rounded w-12 mx-auto mb-0.5" />
-                <div className="h-3 bg-slate-700/30 animate-pulse rounded w-16 mx-auto" />
-              </CardContent>
-            </Card>
-          ))}
+      {/* Stats Section - KORRIGIERT: Identisch zu Dashboard mit initialem "Loading statistics..." */}
+      {statsConfigLoading ? (
+        <div className="mb-12">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <div className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </div>
+          </div>
         </div>
-      ) : (
-        <motion.div
-          className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-12"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.18 }}
-        >
-          {statsConfig.map((stat, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.18, delay: index * 0.05 }}
-            >
-              <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-                <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                  <div className="flex justify-center mb-1.5">
-                    <ConfiguredIcon 
-                      iconName={stat.iconName}
-                      iconConfig={iconConfigs[stat.iconName]}
-                      size="w-5 h-5"
-                    />
-                  </div>
-                  <motion.div
-                    key={stat.value}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ duration: 0.3 }}
-                    className="text-lg font-bold text-white mb-0.5"
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-12 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
                   >
-                    {stat.value}
-                  </motion.div>
-                  <div className="text-slate-400 text-xs leading-tight">
-                    {stat.label}
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </motion.div>
+                    <ConfiguredIcon
+                      iconName="ChevronLeft"
+                      iconConfig={iconConfigs['ChevronLeft']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
+                    />
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ConfiguredIcon
+                      iconName="ChevronRight"
+                      iconConfig={iconConfigs['ChevronRight']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
+                    />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-12"
+            style={{
+              gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
+      ) : (
+        <div className="mb-12 text-center py-8 text-slate-400">
+          <p>No stats configured for Engage. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
+        </div>
       )}
 
       {/* Participation Options - Progressive Loading */}

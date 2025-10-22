@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,8 +8,6 @@ import { motion } from 'framer-motion';
 import { format, subDays } from 'date-fns';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
-import { useCachedData } from '@/components/caching/useCachedData';
-import { useQueryClient } from '@tanstack/react-query';
 import StatCard from '@/components/StatCard';
 
 // Helper function for Bitcoin transaction amount calculation
@@ -252,7 +251,7 @@ const TransactionCard = ({ title, transactions, type, iconName, address, error, 
       </CardHeader>
       <CardContent className="space-y-2">
         {error ? (
-          <p className="text-red-400 text-sm">Error: {error}</p>
+          <p className="text-red-400 text-sm">Error: {error.message || error.toString()}</p>
         ) : transactions.length === 0 ? (
           <p className="text-slate-400 text-sm">No recent transactions</p>
         ) : (
@@ -508,7 +507,7 @@ const NostrEventCard = ({ events, error, isLoading, iconConfigs }) => {
       </CardHeader>
       <CardContent className="space-y-2">
         {error ? (
-          <p className="text-red-400 text-sm">Error: {error}</p>
+          <p className="text-red-400 text-sm">Error: {error.message || error.toString()}</p>
         ) : events.length === 0 ? (
           <p className="text-slate-400 text-sm">No recent Nostr events found</p>
         ) : (
@@ -525,68 +524,95 @@ const NostrEventCard = ({ events, error, isLoading, iconConfigs }) => {
 
 export default function Status() {
   const { iconConfigs } = useAllIconConfigs();
-  const queryClient = useQueryClient();
-  const previousApiDataRef = useRef(null);
-  const previousNostrDataRef = useRef(null);
-
   const BITCOIN_ADDRESS = "bc1q7davwh4083qrw8dsnazavamul4ngam99zt7nfy";
 
-  // Use useCachedData for API status with 5-minute polling
-  const { 
-    data: apiData, 
-    isLoading: isLoadingApi,
-    error: apiError 
-  } = useCachedData(
-    ['status', 'api-check'],
-    async () => {
-      console.log('[Status] Fetching API status...');
-      const response = await base44.functions.invoke('checkApiStatus');
-      return response.data;
-    },
-    'activity',
-    {
-      refetchInterval: 300000, // 5 minutes
-      refetchIntervalInBackground: true,
-      onSuccess: (newData) => {
-        if (previousApiDataRef.current && JSON.stringify(previousApiDataRef.current) !== JSON.stringify(newData)) {
-          console.log('[Status] API data changed, updating cache');
-        }
-        previousApiDataRef.current = newData;
-      }
-    }
-  );
+  // Eindeutige Session-ID für diesen Mount
+  const sessionId = useRef(`status_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
 
-  // Use useCachedData for Nostr activity with 5-minute polling
-  const { 
-    data: nostrData, 
-    isLoading: isLoadingNostr,
-    error: nostrError 
-  } = useCachedData(
-    ['status', 'nostr-check'],
-    async () => {
-      console.log('[Status] Fetching Nostr activity...');
-      const response = await base44.functions.invoke('checkNostrActivity');
-      return response.data;
-    },
-    'activity',
-    {
-      refetchInterval: 300000, // 5 minutes
-      refetchIntervalInBackground: true,
-      onSuccess: (newData) => {
-        if (previousNostrDataRef.current && JSON.stringify(previousNostrDataRef.current) !== JSON.stringify(newData)) {
-          console.log('[Status] Nostr data changed, updating cache');
-        }
-        previousNostrDataRef.current = newData;
-      }
-    }
-  );
+  // State für API-Checks
+  const [apiData, setApiData] = useState(null);
+  const [isLoadingApi, setIsLoadingApi] = useState(true);
+  const [apiError, setApiError] = useState(null);
 
-  // Load ALL health check results from database (for stats calculation)
-  const { data: allResults = [], isLoading: loadingResults } = useCachedData(
-    ['system-health', 'results'],
-    () => base44.entities.SystemHealthCheckResult.list('-timestamp', 5000),
-    'activity'
-  );
+  // State für Nostr-Checks
+  const [nostrData, setNostrData] = useState(null);
+  const [isLoadingNostr, setIsLoadingNostr] = useState(true);
+  const [nostrError, setNostrError] = useState(null);
+
+  // State für Health Check Results
+  const [allResults, setAllResults] = useState([]);
+  const [loadingResults, setLoadingResults] = useState(true);
+
+  // Refs um sicherzustellen, dass jede Funktion NUR EINMAL aufgerufen wird
+  const hasFetchedApi = useRef(false);
+  const hasFetchedNostr = useRef(false);
+  const hasFetchedResults = useRef(false);
+
+  // Fetch API status ONCE on mount
+  useEffect(() => {
+    if (hasFetchedApi.current) return;
+    hasFetchedApi.current = true;
+    
+    console.log(`[Status ${sessionId.current}] Fetching API status ONCE...`);
+    base44.functions.invoke('checkApiStatus', { 
+      source: `status_page_${sessionId.current}` // Eindeutiger Source
+    })
+      .then(response => {
+        console.log(`[Status ${sessionId.current}] API check completed`);
+        setApiData(response.data);
+        setIsLoadingApi(false);
+      })
+      .catch(error => {
+        console.error(`[Status ${sessionId.current}] API check error:`, error);
+        setApiError(error);
+        setIsLoadingApi(false);
+      });
+  }, []);
+
+  // Fetch Nostr status ONCE on mount
+  useEffect(() => {
+    if (hasFetchedNostr.current) return;
+    hasFetchedNostr.current = true;
+    
+    console.log(`[Status ${sessionId.current}] Fetching Nostr status ONCE...`);
+    base44.functions.invoke('checkNostrActivity', {
+      source: `status_page_${sessionId.current}` // Eindeutiger Source
+    })
+      .then(response => {
+        console.log(`[Status ${sessionId.current}] Nostr check completed`);
+        setNostrData(response.data);
+        setIsLoadingNostr(false);
+      })
+      .catch(error => {
+        console.error(`[Status ${sessionId.current}] Nostr check error:`, error);
+        setNostrError(error);
+        setIsLoadingNostr(false);
+      });
+  }, []);
+
+  // Fetch health check results ONCE on mount
+  useEffect(() => {
+    if (hasFetchedResults.current) return;
+    hasFetchedResults.current = true;
+    
+    console.log(`[Status ${sessionId.current}] Fetching health check results ONCE...`);
+    base44.entities.SystemHealthCheckResult.list('-timestamp', 5000)
+      .then(results => {
+        setAllResults(results);
+        setLoadingResults(false);
+      })
+      .catch(error => {
+        console.error(`[Status ${sessionId.current}] Error fetching results:`, error);
+        setLoadingResults(false);
+      });
+  }, []);
+
+  // Log beim Unmount
+  useEffect(() => {
+    return () => {
+      console.log(`[Status ${sessionId.current}] Component unmounting`);
+    };
+  }, []);
 
   // Extract processed data from API response
   const bitcoinStatus = apiData?.mempool || null;
@@ -595,26 +621,24 @@ export default function Status() {
     .map((tx) => {
       const { amount, direction } = getBitcoinTxAmountHelper(tx, BITCOIN_ADDRESS);
       return {
-        id: tx.txid,
-        hash: tx.txid,
+        ...tx,
         amount,
         direction,
-        timestamp: tx.status?.block_time,
+        timestamp: tx.status?.block_time ? tx.status.block_time * 1000 : null, // Convert to ms, fallback to null
         type: 'bitcoin'
       };
     })
-    .slice(0, 3);
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)) // Sort by timestamp, handling nulls
+    .slice(0, 3); // Keep only 3 for display
 
   const lightningTransactions = (apiData?.lightningTransactions || [])
     .map((tx) => ({
-      id: tx.id || tx.payment_hash,
-      hash: tx.id || tx.payment_hash,
-      amount: tx.amount,
-      direction: tx.type === 'incoming' ? 'in' : 'out',
-      timestamp: tx.created_at,
-      type: 'lightning'
+      ...tx,
+      timestamp: tx.created_at ? tx.created_at * 1000 : null, // Convert to ms, fallback to null
+      direction: tx.type === 'incoming' ? 'in' : 'out', // ✅ KORRIGIERT: Genau wie auf /Treasury
     }))
-    .slice(0, 3);
+    .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)) // Sort by timestamp, handling nulls
+    .slice(0, 3); // Keep only 3 for display
 
   // Extract Nostr data
   const relayStatuses = nostrData?.relayStatuses || [];
@@ -630,7 +654,7 @@ export default function Status() {
     totalRelays: totalCount
   };
 
-  const nostrEvents = (nostrData?.events || []).slice(0, 3);
+  const nostrEvents = (nostrData?.events || []).slice(0, 3); // Keep only 3 for display
 
   // Calculate stats from ALL historical results
   const stats = React.useMemo(() => {
@@ -657,10 +681,10 @@ export default function Status() {
     };
   }, [allResults]);
 
-  const isLoadingAny = isLoadingApi || isLoadingNostr || loadingResults;
+  const showStatsSkeleton = isLoadingApi || isLoadingNostr || loadingResults;
 
   return (
-    <div className="p-4 lg:p-8">
+    <div className="p-4 lg:p-8 min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       {/* Header - ALWAYS VISIBLE immediately */}
       <div className="mb-8">
         <div className="flex items-center gap-4 mb-3">
@@ -683,7 +707,7 @@ export default function Status() {
         </p>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Grid */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -693,44 +717,44 @@ export default function Status() {
         <StatCard
           iconName="Activity"
           iconConfig={iconConfigs['Activity']}
-          value={isLoadingAny ? '—' : stats.totalChecks}
+          value={showStatsSkeleton ? '—' : stats.totalChecks}
           label="Last Checks"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
         <StatCard
           iconName="CheckCircle"
           iconConfig={iconConfigs['CheckCircle']}
-          value={isLoadingAny ? '—' : stats.successfulChecks}
+          value={showStatsSkeleton ? '—' : stats.successfulChecks}
           label="Successful"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
         <StatCard
           iconName="XCircle"
           iconConfig={iconConfigs['XCircle']}
-          value={isLoadingAny ? '—' : stats.failedChecks}
+          value={showStatsSkeleton ? '—' : stats.failedChecks}
           label="Failed"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
         <StatCard
           iconName="AlertTriangle"
           iconConfig={iconConfigs['AlertTriangle']}
-          value={isLoadingAny ? '—' : stats.degradedChecks}
+          value={showStatsSkeleton ? '—' : stats.degradedChecks}
           label="Degraded"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
         <StatCard
           iconName="Clock"
           iconConfig={iconConfigs['Clock']}
-          value={isLoadingAny ? '—' : `${stats.avgResponseTime}ms`}
+          value={showStatsSkeleton ? '—' : `${stats.avgResponseTime}ms`}
           label="Avg Response"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
         <StatCard
           iconName="TrendingUp"
           iconConfig={iconConfigs['TrendingUp']}
-          value={isLoadingAny ? '—' : `${stats.uptimePercentage}%`}
+          value={showStatsSkeleton ? '—' : `${stats.uptimePercentage}%`}
           label="Uptime"
-          isLoading={isLoadingAny}
+          isLoading={showStatsSkeleton}
         />
       </motion.div>
 
@@ -767,7 +791,7 @@ export default function Status() {
             type="bitcoin"
             iconName="Bitcoin"
             address={BITCOIN_ADDRESS}
-            error={apiError?.message}
+            error={apiError}
             isLoading={isLoadingApi}
             iconConfigs={iconConfigs}
           />
@@ -789,7 +813,7 @@ export default function Status() {
             transactions={lightningTransactions}
             type="lightning"
             iconName="Zap"
-            error={apiError?.message}
+            error={apiError}
             isLoading={isLoadingApi}
             iconConfigs={iconConfigs}
           />
@@ -809,7 +833,7 @@ export default function Status() {
 
           <NostrEventCard
             events={nostrEvents}
-            error={nostrError?.message}
+            error={nostrError}
             isLoading={isLoadingNostr}
             iconConfigs={iconConfigs}
           />

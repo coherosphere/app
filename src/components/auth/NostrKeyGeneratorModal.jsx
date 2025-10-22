@@ -482,7 +482,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Info Section */}
                                     <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <Shield className="w-5 h-5 text-purple-400 flex-shrink-0 mt-0.5" />
+                                            <Shield className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div className="text-sm text-purple-200 leading-relaxed">
                                                 <strong>Your private key (nsec)</strong> is your access. 
                                                 Keep it safe – <strong>no one else can recover it</strong>.
@@ -559,7 +559,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Success Message */}
                                     <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                                            <CheckCircle className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div>
                                                 <div className="text-green-400 font-semibold mb-1">
                                                     Keypair successfully generated!
@@ -646,7 +646,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Security Warning */}
                                     <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 22h16a2 2 0 0 0 1.73-4Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-triangle w-5 h-5 text-white flex-shrink-0 mt-0.5"><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 22h16a2 2 0 0 0 1.73-4Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
                                             <div className="text-sm text-red-200 leading-relaxed">
                                                 <strong>Important:</strong> If you lose your private key (nsec), 
                                                 it's gone forever. There's no way to recover it. 
@@ -658,7 +658,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Backup Download Section */}
                                     <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3 mb-3">
-                                            <Key className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+                                            <Key className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div className="flex-1">
                                                 <div className="text-blue-300 font-semibold mb-1">
                                                     Backup Your Keys
@@ -705,7 +705,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Save Options Screen */}
                                     <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <Lock className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+                                            <Lock className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div className="text-sm text-blue-200 leading-relaxed">
                                                 <strong>Would you like to save your private key locally for automatic login later?</strong>
                                                 <p className="mt-2">
@@ -718,7 +718,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Option 1: Save Locally */}
                                     <div className="space-y-4">
                                         <div className="flex items-center gap-2">
-                                            <Database className="w-5 h-5 text-green-400" />
+                                            <Database className="w-5 h-5 text-white" />
                                             <h3 className="text-lg font-semibold text-white">Yes, save locally (recommended)</h3>
                                         </div>
                                         
@@ -793,7 +793,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     {/* Option 2: Skip */}
                                     <div className="space-y-4">
                                         <div className="flex items-center gap-2">
-                                            <Key className="w-5 h-5 text-slate-400" />
+                                            <Key className="w-5 h-5 text-white" />
                                             <h3 className="text-lg font-semibold text-white">No, I'll manage it myself</h3>
                                         </div>
                                         
@@ -816,7 +816,7 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
                                     <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-6">
                                         <div className="flex flex-col items-center gap-4 text-center">
                                             <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center">
-                                                <CheckCircle className="w-8 h-8 text-green-400" />
+                                                <CheckCircle className="w-8 h-8 text-white" />
                                             </div>
                                             <div>
                                                 <h3 className="text-xl font-bold text-white mb-2">
@@ -852,3 +852,4 @@ export default function NostrKeyGeneratorModal({ isOpen, onClose }) {
         </AnimatePresence>
     );
 }
+

@@ -1,41 +1,43 @@
-
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { motion } from 'framer-motion';
-import { generateQrCode } from '@/api/functions';
+import { base44 } from '@/api/base44Client';
 import CoherosphereNetworkSpinner from '@/components/spinners/CoherosphereNetworkSpinner';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
 
-export default function ProfileHeader({ user }) {
+export default function ProfileHeader({ user, onNameChange }) {
   const [copied, setCopied] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [qrCodeUrl, setQrCodeUrl] = useState(null);
   const [isLoadingQR, setIsLoadingQR] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState('');
   const [isLoadingAvatar, setIsLoadingAvatar] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
 
   const { iconConfigs } = useAllIconConfigs();
+
+  // Initialize edited name when user changes
+  useEffect(() => {
+    setEditedName(user.display_name || user.full_name || '');
+  }, [user]);
 
   // Generate proper Nostr profile picture URL
   useEffect(() => {
     const loadNostrAvatar = async () => {
       if (user.avatar_url && user.avatar_url.startsWith('http')) {
-        // If we already have a proper avatar URL, use it
         setAvatarUrl(user.avatar_url);
         return;
       }
 
-      // Try to construct a Nostr profile picture URL
       const npub = user.nostr_pubkey || "npub1kc9weag9hjf0p0xz5naamts48rdkzymucvrd9ws8ns7n4x3qq5gsljlnck";
-      
-      // Use a fallback approach with better avatar generation
       const fallbackUrl = `https://api.dicebear.com/7.x/identicon/svg?seed=${npub}&backgroundColor=FF6A00,FF8C42&size=120`;
-      
       setAvatarUrl(fallbackUrl);
     };
 
@@ -52,27 +54,21 @@ export default function ProfileHeader({ user }) {
   const handleShowQR = async () => {
     setShowQR(true);
     
-    // Generate QR code if not already generated
     if (!qrCodeUrl) {
       setIsLoadingQR(true);
       try {
         const npub = user.nostr_pubkey || "npub1kc9weag9hjf0p0xz5naamts48rdkzymucvrd9ws8ns7n4x3qq5gsljlnck";
         
-        console.log('Generating QR code for:', npub);
-        const response = await generateQrCode({ data: npub });
-        console.log('QR code response:', response);
+        const response = await base44.functions.invoke('generateQrCode', { data: npub });
         
-        // The response now contains a JSON object with qrCodeUrl (Base64 data URL)
         if (response.data && response.data.qrCodeUrl) {
-          console.log('QR code URL received (Base64)');
           setQrCodeUrl(response.data.qrCodeUrl);
         } else {
           throw new Error('Invalid response format');
         }
-        
       } catch (error) {
         console.error('Error generating QR code:', error);
-        alert('Fehler beim Generieren des QR-Codes: ' + error.message);
+        alert('Error generating QR code: ' + error.message);
         setShowQR(false);
       } finally {
         setIsLoadingQR(false);
@@ -89,14 +85,24 @@ export default function ProfileHeader({ user }) {
     }, 1000);
   };
 
-  // The cleanup useEffect for object URLs is no longer needed as we are using Base64 data URLs.
+  const handleSaveName = () => {
+    if (editedName.trim() && editedName.trim() !== (user.display_name || user.full_name)) {
+      onNameChange(editedName.trim());
+    }
+    setIsEditingName(false);
+  };
+
+  const handleCancelEdit = () => {
+    setEditedName(user.display_name || user.full_name || '');
+    setIsEditingName(false);
+  };
 
   return (
     <>
       <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700">
         <CardContent className="p-8">
           <div className="flex flex-col md:flex-row gap-6 items-center md:items-start">
-            {/* Avatar */}
+            {/* Avatar with Nostr Badge and Refresh */}
             <div className="flex-shrink-0">
               <div className="relative">
                 <img
@@ -142,17 +148,73 @@ export default function ProfileHeader({ user }) {
 
             {/* Profile Info */}
             <div className="flex-1 text-center md:text-left">
-              <div className="mb-4">
-                <h2 className="text-2xl font-bold text-white mb-1">
-                  {user.display_name || user.full_name || 'Anonymous User'}
-                </h2>
-                <p className="text-slate-400 leading-relaxed">
-                  {user.bio || 'Building resonance in the coherosphere. Creating connections between humans, technology, and values.'}
-                </p>
+              {/* Editable Name */}
+              <div className="mb-2">
+                {isEditingName ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={editedName}
+                      onChange={(e) => setEditedName(e.target.value)}
+                      className="text-xl font-bold bg-slate-900/50 border-slate-600 text-white"
+                      placeholder="Your name"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveName();
+                        if (e.key === 'Escape') handleCancelEdit();
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleSaveName}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      <ConfiguredIcon 
+                        iconName="Check"
+                        iconConfig={iconConfigs['Check']}
+                        size="w-4 h-4"
+                      />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleCancelEdit}
+                      className="text-slate-400 hover:text-white"
+                    >
+                      <ConfiguredIcon 
+                        iconName="X"
+                        iconConfig={iconConfigs['X']}
+                        size="w-4 h-4"
+                      />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 justify-center md:justify-start">
+                    <h2 className="text-2xl font-bold text-white">
+                      {user.display_name || user.full_name || 'Anonymous User'}
+                    </h2>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setIsEditingName(true)}
+                      className="text-slate-400 hover:text-white"
+                    >
+                      <ConfiguredIcon 
+                        iconName="Edit2"
+                        iconConfig={iconConfigs['Edit2']}
+                        size="w-4 h-4"
+                      />
+                    </Button>
+                  </div>
+                )}
               </div>
+              
+              {/* Bio */}
+              <p className="text-slate-400 leading-relaxed mb-4">
+                {user.bio || 'Building resonance in the coherosphere. Creating connections between humans, technology, and values.'}
+              </p>
 
-              {/* Npub Display */}
-              <div className="bg-slate-900/50 rounded-lg p-4 mb-4">
+              {/* Nostr Public Key */}
+              <div className="bg-slate-900/50 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-slate-300">Nostr Public Key</span>
                   <div className="flex gap-2">
@@ -195,22 +257,12 @@ export default function ProfileHeader({ user }) {
                   {user.nostr_pubkey || "npub1kc9weag9hjf0p0xz5naamts48rdkzymucvrd9ws8ns7n4x3qq5gsljlnck"}
                 </div>
               </div>
-
-              {/* Role only */}
-              <div className="flex gap-6 text-sm justify-center md:justify-start">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-white h-8 flex items-center justify-center">
-                    {user.role === 'admin' ? 'Admin' : 'Member'}
-                  </div>
-                  <div className="text-slate-400">Role</div>
-                </div>
-              </div>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* QR Code Modal - Now outside the Card for fullscreen coverage */}
+      {/* QR Code Modal */}
       {showQR && (
         <motion.div
           initial={{ opacity: 0 }}

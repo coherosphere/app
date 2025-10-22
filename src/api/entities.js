@@ -67,6 +67,8 @@ export const StatConfiguration = base44.entities.StatConfiguration;
 
 export const StatValue = base44.entities.StatValue;
 
+export const NostrUser = base44.entities.NostrUser;
+
 
 
 // auth sdk:

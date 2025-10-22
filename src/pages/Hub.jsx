@@ -18,6 +18,21 @@ import { useLoading } from '@/components/loading/LoadingContext';
 import { useCachedData } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from "@/components/StatCard"; // Keep StatCard as it's used for existing stats
+import { ChevronLeft, ChevronRight } from 'lucide-react'; // No longer needed for dynamic stats scrolling
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 // Mock data for members as we can't insert into User entity
 const mockMembers = [
@@ -48,9 +63,9 @@ export default function HubPage() {
     hubResonance: 0,
   });
 
-  // Progressive Loading States - each section loads in parallel
+  // Progressive Loading States - sectionsReady
   const [sectionsReady, setSectionsReady] = useState({
-    stats: false,
+    stats: false, // Nur noch für dynamische Stats
     actions: false,
     tabs: false,
     content: false
@@ -59,11 +74,16 @@ export default function HubPage() {
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
 
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = React.useRef(null);
+
   // Determine which hub to load (from URL or user's selected hub)
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const hubIdParam = urlParams.get('hubId');
-    
+
     if (hubIdParam) {
       setIsExternalHub(true);
       setHubId(hubIdParam);
@@ -127,18 +147,163 @@ export default function HubPage() {
     { enabled: !!actualHubId }
   );
 
-  const isLoading = (hubId === 'user' && userLoading) || hubsLoading || projectsLoading || eventsLoading || resonanceLoading;
+  // --- NEU: Daten laden für dynamische Stats ---
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['Hub', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'hub'
+  );
+
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['Hub', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'hub'
+  );
+
+  const { data: appConfigList = [] } = useCachedData(
+    ['Hub', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'hub'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Hub'] || [];
+
+  // Kombiniere alle Ladezustände
+  const isLoading = (hubId === 'user' && userLoading) || hubsLoading || projectsLoading || eventsLoading || resonanceLoading || statsConfigLoading || statsValuesLoading;
 
   useEffect(() => {
     setLoading(isLoading);
   }, [isLoading, setLoading]);
+
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = React.useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für Hub-Seite filtern
+  const activeStatsForHub = React.useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Hub')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder
+  const sortedStatConfigs = React.useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForHub].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForHub.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForHub, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = (config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency': // Assuming currency is also a number for now, or might need specific formatting for sats etc.
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue); // Further formatting might be needed for time
+      default:
+        return String(rawValue);
+    }
+  };
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = React.useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = React.useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140; // Adjust based on card width + gap
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) { // Near the start, jump to end
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else { // direction === 'right'
+      if (scrollLeft >= scrollWidth - clientWidth - 10) { // Near the end, jump to start
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik
+  useEffect(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length <= 1) { // Only enable if there's more than one stat
+        setShowLeftArrow(false);
+        setShowRightArrow(false);
+        return;
+    }
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
+
 
   // Set hub when data is loaded
   useEffect(() => {
     if (!actualHubId || allHubs.length === 0) return;
 
     const currentHub = allHubs.find(h => h.id === actualHubId);
-    
+
     if (!currentHub) {
       if (isExternalHub) {
         setError("Hub not found. Please select a valid hub from the Global Hubs page.");
@@ -153,7 +318,7 @@ export default function HubPage() {
     setError(null);
   }, [actualHubId, allHubs, isExternalHub]);
 
-  // Calculate stats when data changes
+  // Calculate stats when data changes (for backward compatibility of tab counts etc)
   useEffect(() => {
     if (!hub) return;
 
@@ -173,25 +338,30 @@ export default function HubPage() {
 
   // Progressive reveal effect - triggered when data is ready
   useEffect(() => {
-    if (!hub || isLoading) {
-      // Reset all sections when loading
+    // Stats section controlled separately now
+    if (!statsConfigLoading && !statsValuesLoading) {
+      setSectionsReady(prev => ({ ...prev, stats: true }));
+    }
+
+    // Other sections depend on general hub data loading
+    if (!isLoading) {
+      // Data is ready - reveal other sections in parallel with slight stagger
+      const staggerDelay = 50; // 50ms stagger between sections
+
+      setTimeout(() => setSectionsReady(prev => ({ ...prev, actions: true })), staggerDelay);
+      setTimeout(() => setSectionsReady(prev => ({ ...prev, tabs: true })), staggerDelay * 2);
+      setTimeout(() => setSectionsReady(prev => ({ ...prev, content: true })), staggerDelay * 3);
+    } else {
+      // Reset sections if loading again
       setSectionsReady({
         stats: false,
         actions: false,
         tabs: false,
         content: false
       });
-      return;
     }
+  }, [isLoading, statsConfigLoading, statsValuesLoading]);
 
-    // Data is ready - reveal all sections in parallel with slight stagger
-    const staggerDelay = 50; // 50ms stagger between sections
-    
-    setTimeout(() => setSectionsReady(prev => ({ ...prev, stats: true })), 0);
-    setTimeout(() => setSectionsReady(prev => ({ ...prev, actions: true })), staggerDelay);
-    setTimeout(() => setSectionsReady(prev => ({ ...prev, tabs: true })), staggerDelay * 2);
-    setTimeout(() => setSectionsReady(prev => ({ ...prev, content: true })), staggerDelay * 3);
-  }, [hub, isLoading]);
 
   const handleCardClick = (project) => {
     if (project.status === 'completed' || project.status === 'cancelled') {
@@ -204,7 +374,7 @@ export default function HubPage() {
   const handleSupport = async (project) => {
     try {
       const currentUser = await User.me();
-      
+
       const currentSupporters = project.supporters || [];
       if (currentSupporters.includes(currentUser.id)) {
         console.log('User is already supporting this project');
@@ -212,7 +382,7 @@ export default function HubPage() {
       }
 
       const updatedSupporters = [...currentSupporters, currentUser.id];
-      
+
       await Project.update(project.id, {
         ...project,
         goal: project.goal || project.description || "Project goal",
@@ -222,7 +392,9 @@ export default function HubPage() {
       });
 
       console.log(`Successfully added support! Total supporters: ${updatedSupporters.length}`);
-      
+      // Optionally, refetch projects to update the UI
+      // queryClient.invalidateQueries(['hub', 'projects', actualHubId]);
+
     } catch (error) {
       console.error('Error supporting project:', error);
     }
@@ -252,13 +424,52 @@ export default function HubPage() {
     }
   };
 
+  // Render Funktionen für Stat Cards
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
+
+
   if (error) {
     return (
       <div className="p-4 lg:p-8">
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="text-center p-6 bg-orange-500/10 border border-orange-500/30 rounded-xl">
-            <ConfiguredIcon 
-              iconName="AlertTriangle" 
+            <ConfiguredIcon
+              iconName="AlertTriangle"
               iconConfig={iconConfigs['AlertTriangle']}
               size="w-12 h-12"
               className="mx-auto mb-4"
@@ -267,8 +478,8 @@ export default function HubPage() {
             {error.includes("profile") ? (
               <Link to={createPageUrl("Profile")}>
                 <Button className="bg-orange-500 hover:bg-orange-600 text-white">
-                  <ConfiguredIcon 
-                    iconName="User" 
+                  <ConfiguredIcon
+                    iconName="User"
                     iconConfig={iconConfigs['User']}
                     size="w-4 h-4"
                     className="mr-2"
@@ -279,8 +490,8 @@ export default function HubPage() {
             ) : error.includes("Hub not found") ? (
               <Link to={createPageUrl("GlobalHubs")}>
                 <Button className="bg-orange-500 hover:bg-orange-600 text-white">
-                  <ConfiguredIcon 
-                    iconName="Globe2" 
+                  <ConfiguredIcon
+                    iconName="Globe2"
                     iconConfig={iconConfigs['Globe2']}
                     size="w-4 h-4"
                     className="mr-2"
@@ -289,7 +500,7 @@ export default function HubPage() {
                 </Button>
               </Link>
             ) : (
-              <Button 
+              <Button
                 onClick={() => window.location.reload()}
                 className="bg-orange-500 hover:bg-orange-600 text-white"
               >
@@ -302,7 +513,6 @@ export default function HubPage() {
     );
   }
 
-  // Motion variants for fade-in
   const fadeIn = {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { duration: 0.18 } }
@@ -313,8 +523,8 @@ export default function HubPage() {
       {/* Header - ALWAYS VISIBLE immediately */}
       <div className="mb-8">
         <div className="flex items-center gap-4 mb-3">
-          <ConfiguredIcon 
-            iconName="MapPin" 
+          <ConfiguredIcon
+            iconName="MapPin"
             iconConfig={iconConfigs['MapPin']}
             size="w-12 h-12"
             className="flex-shrink-0"
@@ -329,19 +539,20 @@ export default function HubPage() {
         <p className="text-lg text-slate-400 leading-relaxed max-w-2xl">
           {hub?.description || 'Loading hub information...'}
         </p>
-          
+
         {isExternalHub && (
-          <div className="mt-4"> {/* Added a div to wrap the button and give it margin-top */}
+          <div className="mt-4">
             <Link to={createPageUrl("Hub")}>
-              <Button 
-                variant="ghost" 
-                size="sm" 
+              <Button
+                variant="ghost"
+                size="sm"
                 className="text-slate-500 hover:text-slate-300 text-xs flex items-center gap-1.5"
               >
-                <ConfiguredIcon 
-                  iconName="ArrowLeft" 
+                <ConfiguredIcon
+                  iconName="ArrowLeft"
                   iconConfig={iconConfigs['ArrowLeft']}
                   size="w-3 h-3"
+                  className="mr-0.5"
                 />
                 Back to my hub
               </Button>
@@ -350,127 +561,77 @@ export default function HubPage() {
         )}
       </div>
 
-      {/* Stats Section */}
+      {/* Dynamische Stats Section - identisch zu /Projects */}
       {!sectionsReady.stats ? (
         <div className="mb-8">
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-4">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <Card key={i} className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-                <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                  <div className="flex items-center justify-center mb-1.5">
-                    <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-                  </div>
-                  <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
-                  <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
-                </CardContent>
-              </Card>
-            ))}
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <div className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </div>
           </div>
         </div>
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-8 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-1 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-8"
+            style={{
+              gridTemplateColumns: `repeat(${Math.min(sortedStatConfigs.length, 6)}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
       ) : (
-        <motion.div
-          className="mb-8"
-          initial="hidden"
-          animate="visible"
-          variants={fadeIn}
-        >
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-4">
-            <Link to={`${createPageUrl('HubResonance')}?hubId=${hub.id}`} className="block">
-              <Card className="bg-slate-800/50 backdrop-blur-sm border-orange-500/50 hover:border-orange-500 hover:shadow-lg hover:shadow-orange-500/20 transition-all duration-300 h-[98px] overflow-hidden cursor-pointer group">
-                <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                  <div className="flex items-center justify-center mb-1.5">
-                    <ConfiguredIcon 
-                      iconName="Activity" 
-                      iconConfig={iconConfigs['Activity']}
-                      size="w-5 h-5"
-                      className="group-hover:scale-110 transition-transform"
-                    />
-                  </div>
-                  <div className="text-lg font-bold text-orange-400">{Math.round(stats.hubResonance)}</div>
-                  <div className="text-slate-300 text-xs flex items-center justify-center gap-1">
-                    Hub Resonance
-                    <ConfiguredIcon 
-                      iconName="TrendingUp" 
-                      iconConfig={iconConfigs['TrendingUp']}
-                      size="w-3 h-3"
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-
-            <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex justify-center mb-1.5">
-                  <ConfiguredIcon 
-                    iconName="Users" 
-                    iconConfig={iconConfigs['Users']}
-                    size="w-5 h-5"
-                  />
-                </div>
-                <div className="text-lg font-bold text-white">{stats.members}</div>
-                <div className="text-slate-400 text-xs">Members</div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex justify-center mb-1.5">
-                  <ConfiguredIcon 
-                    iconName="Lightbulb" 
-                    iconConfig={iconConfigs['Lightbulb']}
-                    size="w-5 h-5"
-                  />
-                </div>
-                <div className="text-lg font-bold text-white">{stats.projects}</div>
-                <div className="text-slate-400 text-xs">Projects</div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex justify-center mb-1.5">
-                  <ConfiguredIcon 
-                    iconName="Calendar" 
-                    iconConfig={iconConfigs['Calendar']}
-                    size="w-5 h-5"
-                  />
-                </div>
-                <div className="text-lg font-bold text-white">{stats.events}</div>
-                <div className="text-slate-400 text-xs">Events</div>
-              </CardContent>
-            </Card>
-            
-            <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex justify-center mb-1.5">
-                  <ConfiguredIcon 
-                    iconName="Bitcoin" 
-                    iconConfig={iconConfigs['Bitcoin']}
-                    size="w-5 h-5"
-                  />
-                </div>
-                <div className="text-lg font-bold text-white">{stats.satsRaised.toLocaleString()}</div>
-                <div className="text-slate-400 text-xs">Sats Raised</div>
-              </CardContent>
-            </Card>
-            
-            <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex justify-center mb-1.5">
-                  <ConfiguredIcon 
-                    iconName="Bitcoin" 
-                    iconConfig={iconConfigs['Bitcoin']}
-                    size="w-5 h-5"
-                  />
-                </div>
-                <div className="text-lg font-bold text-white">{stats.satsNeeded.toLocaleString()}</div>
-                <div className="text-slate-400 text-xs">Sats Needed</div>
-              </CardContent>
-            </Card>
-          </div>
-        </motion.div>
+        <div className="mb-8 text-center py-8 text-slate-400">
+          <p>No stats configured for Hub. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
+        </div>
       )}
+
 
       {/* Action Buttons Section */}
       {!sectionsReady.actions ? (
@@ -490,8 +651,8 @@ export default function HubPage() {
           <div className="flex flex-col md:flex-row gap-3">
             <Link to={createPageUrl('CreateProject') + `?hubId=${hub.id}`} className="flex-1">
               <Button className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-semibold">
-                <ConfiguredIcon 
-                  iconName="Plus" 
+                <ConfiguredIcon
+                  iconName="Plus"
                   iconConfig={iconConfigs['Plus']}
                   size="w-4 h-4"
                   className="mr-2"
@@ -501,8 +662,8 @@ export default function HubPage() {
             </Link>
             <Link to={createPageUrl('HostEvent') + `?hubId=${hub.id}`} className="flex-1">
               <Button className="w-full bg-gradient-to-r from-turquoise-500 to-cyan-500 hover:from-turquoise-600 hover:to-cyan-600 text-white font-semibold">
-                <ConfiguredIcon 
-                  iconName="Plus" 
+                <ConfiguredIcon
+                  iconName="Plus"
                   iconConfig={iconConfigs['Plus']}
                   size="w-4 h-4"
                   className="mr-2"
@@ -535,20 +696,20 @@ export default function HubPage() {
               onClick={() => setActiveTab('members')}
               variant="ghost"
               className={`
-                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200 
+                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200
                 flex items-center justify-center space-x-[3px]
-                ${activeTab === 'members' 
-                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg' 
+                ${activeTab === 'members'
+                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg'
                   : 'bg-slate-800/50 border border-slate-700 text-slate-300 hover:bg-slate-700/50'
                 }`
               }
             >
               <span>Members</span>
-              <Badge 
-                variant="secondary" 
-                className={`transition-colors duration-200 
+              <Badge
+                variant="secondary"
+                className={`transition-colors duration-200
                 ${activeTab === 'members'
-                  ? 'bg-black/20 text-white' 
+                  ? 'bg-black/20 text-white'
                   : 'bg-slate-700 text-slate-300'
                 }`}
               >
@@ -559,20 +720,20 @@ export default function HubPage() {
               onClick={() => setActiveTab('projects')}
               variant="ghost"
               className={`
-                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200 
+                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200
                 flex items-center justify-center space-x-[3px]
-                ${activeTab === 'projects' 
-                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg' 
+                ${activeTab === 'projects'
+                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg'
                   : 'bg-slate-800/50 border border-slate-700 text-slate-300 hover:bg-slate-700/50'
                 }`
               }
             >
               <span>Projects</span>
-              <Badge 
-                variant="secondary" 
-                className={`transition-colors duration-200 
+              <Badge
+                variant="secondary"
+                className={`transition-colors duration-200
                 ${activeTab === 'projects'
-                  ? 'bg-black/20 text-white' 
+                  ? 'bg-black/20 text-white'
                   : 'bg-slate-700 text-slate-300'
                 }`}
               >
@@ -583,19 +744,19 @@ export default function HubPage() {
               onClick={() => setActiveTab('events')}
               variant="ghost"
               className={`
-                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200 
+                filter-chip h-auto p-2 px-4 rounded-full transition-colors duration-200
                 flex items-center justify-center space-x-[3px]
-                ${activeTab === 'events' 
-                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg' 
+                ${activeTab === 'events'
+                  ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg'
                   : 'bg-slate-800/50 border border-slate-700 text-slate-300 hover:bg-slate-700/50'
                 }`}
             >
               <span>Events</span>
-              <Badge 
-                variant="secondary" 
-                className={`transition-colors duration-200 
+              <Badge
+                variant="secondary"
+                className={`transition-colors duration-200
                 ${activeTab === 'events'
-                  ? 'bg-black/20 text-white' 
+                  ? 'bg-black/20 text-white'
                   : 'bg-slate-700 text-slate-300'
                 }`}
               >
@@ -644,12 +805,12 @@ export default function HubPage() {
             {activeTab === 'projects' && (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {projects.map((project, index) => (
-                  <ProjectCard 
-                    key={project.id} 
-                    project={project} 
-                    index={index} 
-                    onCardClick={handleCardClick} 
-                    onSupport={handleSupport} 
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    index={index}
+                    onCardClick={handleCardClick}
+                    onSupport={handleSupport}
                     onVote={handleVote}
                     isDisabled={project.status === 'completed' || project.status === 'cancelled'}
                   />
@@ -665,9 +826,9 @@ export default function HubPage() {
             {activeTab === 'events' && (
               <div className="space-y-6">
                 {events.map((event, index) => (
-                  <EventCard 
-                    key={event.id} 
-                    event={event} 
+                  <EventCard
+                    key={event.id}
+                    event={event}
                     index={index}
                     onViewDetails={handleEventViewDetails}
                   />

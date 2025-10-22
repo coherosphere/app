@@ -617,7 +617,7 @@ export default function ImportKeypairModal({ isOpen, onClose }) {
                                     {/* Overwrite Warning */}
                                     <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-6">
                                         <div className="flex items-start gap-4">
-                                            <AlertTriangle className="w-8 h-8 text-orange-400 flex-shrink-0 mt-1" />
+                                            <AlertTriangle className="w-8 h-8 text-white flex-shrink-0 mt-1" />
                                             <div>
                                                 <h3 className="text-xl font-bold text-orange-400 mb-3">
                                                     Local Keypair Already Exists
@@ -665,9 +665,9 @@ export default function ImportKeypairModal({ isOpen, onClose }) {
                                     {/* Security Warning */}
                                     <div className="bg-orange-500/10 border border-orange-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <AlertTriangle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
+                                            <AlertTriangle className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div className="text-sm text-orange-200 leading-relaxed">
-                                                <strong>Security Notice:</strong> Only enter your private key on devices and applications you trust.
+                                                <strong className="text-orange-400">Security Notice:</strong> Only enter your private key on devices and applications you trust.
                                                 Your private key gives complete access to your Nostr identity.
                                             </div>
                                         </div>
@@ -730,7 +730,7 @@ export default function ImportKeypairModal({ isOpen, onClose }) {
                                     {/* Success - Keys Validated */}
                                     <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                                            <CheckCircle className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div>
                                                 <div className="text-green-400 font-semibold mb-1">
                                                     Keypair validated successfully!
@@ -745,7 +745,7 @@ export default function ImportKeypairModal({ isOpen, onClose }) {
                                     {/* Save Options */}
                                     <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
                                         <div className="flex items-start gap-3">
-                                            <Lock className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
+                                            <Lock className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
                                             <div className="text-sm text-blue-200 leading-relaxed">
                                                 <strong>Would you like to save your private key locally?</strong>
                                                 <p className="mt-2">

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -13,8 +14,23 @@ import { useCachedData } from '@/components/caching/useCachedData';
 import DonateTransactionList from '@/components/donate/DonateTransactionList';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from '@/components/StatCard';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const BITCOIN_ADDRESS = "bc1q7davwh4083qrw8dsnazavamul4ngam99zt7nfy";
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 export default function DonatePage() {
   const [onChainCopied, setOnChainCopied] = useState(false);
@@ -34,10 +50,16 @@ export default function DonatePage() {
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
 
+  // States für Mobile-Scroll-Navigation (NEU für Stats)
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = React.useRef(null);
+
   // Progressive Loading States
   const [sectionsReady, setSectionsReady] = useState({
     narrative: false,
-    donationTabs: false
+    donationTabs: false,
+    stats: false // NEU für Stats
   });
 
   // Use cached data for treasury transactions
@@ -51,6 +73,30 @@ export default function DonatePage() {
     () => base44.functions.invoke('checkApiStatus', { source: 'donate_page' }),
     'donate'
   );
+
+  // --- NEU: Daten laden für Stats ---
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['donate', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'donate'
+  );
+
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['donate', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'donate'
+  );
+
+  const { data: appConfigList = [] } = useCachedData(
+    ['donate', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'donate'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Donate'] || appConfig?.stat_display_order || [];
 
   // Stable state for transactions
   const [transactions, setTransactions] = useState([]);
@@ -176,6 +222,160 @@ export default function DonatePage() {
     }
   }, [isGeneratingQR, lightningQR, onChainQR]);
 
+  // NEU: Stats ready tracking
+  useEffect(() => {
+    if (!statsConfigLoading && !statsValuesLoading) {
+      setSectionsReady(prev => ({ ...prev, stats: true }));
+    }
+  }, [statsConfigLoading, statsValuesLoading]);
+
+  // --- NEU: Stats-bezogene Memoized-Werte und Funktionen ---
+  const valueMap = React.useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  const activeStatsForThisPage = React.useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Donate')
+    );
+  }, [allStats]);
+
+  const sortedStatConfigs = React.useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForThisPage].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForThisPage.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForThisPage, displayOrder]);
+
+  const formatStatValue = useCallback((config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  }, []);
+
+  const checkScrollPosition = useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  const handleScroll = useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length === 0) return;
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
+
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
+
   const handleCopy = (text, type) => {
     navigator.clipboard.writeText(text);
     if (type === 'on-chain') {
@@ -242,10 +442,76 @@ export default function DonatePage() {
             </div>
           </div>
           <p className="text-lg text-slate-400 leading-relaxed max-w-2xl" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-            Every sat you contribute resonates through the coherosphere.
             Together we build a resilient and meaningful future – transparent, decentralized, and aligned with our shared values.
           </p>
         </motion.div>
+
+        {/* NEU: Dynamic Stats Section - VOR der Two-column layout */}
+        {(statsConfigLoading || statsValuesLoading) ? (
+          <div className="mb-8">
+            <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+              <div className="p-3 h-full flex items-center justify-center">
+                <div className="text-slate-500 text-xs">Loading statistics...</div>
+              </div>
+            </div>
+          </div>
+        ) : sortedStatConfigs.length > 0 ? (
+          <>
+            {/* Mobile Ansicht: Horizontales Scrollen */}
+            <motion.div
+              className="lg:hidden mb-8 relative"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.1 }}
+            >
+              <div className="bg-transparent border-none p-0 m-0">
+                <div className="relative">
+                  {showLeftArrow && (
+                    <button
+                      onClick={() => handleScroll('left')}
+                      className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                      aria-label="Scroll left"
+                    >
+                      <ChevronLeft className="w-4 h-4 text-slate-400" />
+                    </button>
+                  )}
+
+                  <div
+                    ref={mobileStatsScrollRef}
+                    className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                    style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                  >
+                    {renderStatCardsMobile()}
+                  </div>
+
+                  {showRightArrow && (
+                    <button
+                      onClick={() => handleScroll('right')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                      aria-label="Scroll right"
+                    >
+                      <ChevronRight className="w-4 h-4 text-slate-400" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Desktop Ansicht: Grid */}
+            <motion.div
+              className="hidden lg:grid mb-8"
+              style={{
+                gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+                gap: '1rem'
+              }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.1 }}
+            >
+              {renderStatCardsGridDesktop()}
+            </motion.div>
+          </>
+        ) : null}
 
         {/* Two-column layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

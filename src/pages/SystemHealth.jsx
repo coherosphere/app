@@ -19,6 +19,12 @@ export default function SystemHealth() {
   const [message, setMessage] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [showRefreshSkeleton, setShowRefreshSkeleton] = useState(false); // New state for refresh skeleton
+
+  // ✅ NEU: Filter States
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterCheckName, setFilterCheckName] = useState('all');
+  const [filterSource, setFilterSource] = useState('all');
+
   const itemsPerPage = 15;
   const queryClient = useQueryClient(); // Initialized useQueryClient
   const previousDataRef = useRef(null); // Ref to store previous data for comparison
@@ -41,7 +47,7 @@ export default function SystemHealth() {
   // Load health check results with caching and 10-second polling
   const { data: allResults = [], isLoading: loadingResults, refetch: refetchResults } = useCachedData(
     ['system-health', 'results'],
-    () => base44.entities.SystemHealthCheckResult.list('-timestamp', 5000),
+    ()    => base44.entities.SystemHealthCheckResult.list('-timestamp', 5000),
     'activity', // Using 'activity' domain for fresh data
     {
       refetchInterval: 10000, // Poll every 10 seconds
@@ -226,7 +232,7 @@ export default function SystemHealth() {
     try {
       const response = await base44.functions.invoke('runHealthCheck', { 
         check_type: checkType,
-        source: 'status_page'
+        source: 'system_health_page' // ✅ Changed from 'status_page' to 'system_health_page'
       });
       
       if (response.data.success) {
@@ -312,10 +318,74 @@ export default function SystemHealth() {
     );
   };
 
-  // Pagination logic
-  const totalPages = Math.ceil(allResults.length / itemsPerPage);
+  // ✅ NEU: Gefilterte Ergebnisse vor Pagination
+  const filteredResults = React.useMemo(() => {
+    return allResults.filter(result => {
+      // Status Filter
+      if (filterStatus !== 'all' && result.status !== filterStatus) {
+        return false;
+      }
+      
+      // Check Name Filter (simplified names)
+      if (filterCheckName !== 'all') {
+        const simplifiedName = (() => {
+          if (result.check_name.includes('Mempool')) return 'Mempool API';
+          if (result.check_name.includes('Alby')) return 'Alby Lightning';
+          if (result.check_name.includes('Nostr')) return 'Nostr Relays';
+          return result.check_name;
+        })();
+        
+        if (simplifiedName !== filterCheckName) {
+          return false;
+        }
+      }
+      
+      // Source Filter
+      if (filterSource !== 'all') {
+        // Normalize source for comparison, matching the filter options
+        let normalizedSource = result.triggered_by;
+        if (result.triggered_by === 'cron' || result.triggered_by === 'cron_job') { 
+          normalizedSource = 'cron_job';
+        } else if (result.triggered_by?.startsWith('status_page')) { // Handles 'status_page' and 'status_page_xxx'
+          normalizedSource = 'status_page';
+        } else if (result.triggered_by?.startsWith('admin_user:') || result.triggered_by?.startsWith('user_')) {
+          normalizedSource = 'manual';
+        }
+        // Additional page-specific sources might also have session IDs appended, normalize them
+        else if (result.triggered_by?.startsWith('system_health_page')) {
+          normalizedSource = 'system_health_page';
+        }
+        else if (result.triggered_by?.startsWith('activity_page')) {
+          normalizedSource = 'activity_page';
+        }
+        else if (result.triggered_by?.startsWith('treasury_page')) {
+          normalizedSource = 'treasury_page';
+        }
+        else if (result.triggered_by?.startsWith('donate_page')) {
+          normalizedSource = 'donate_page';
+        }
+        else if (result.triggered_by?.startsWith('engage_page')) {
+          normalizedSource = 'engage_page';
+        }
+        
+        if (normalizedSource !== filterSource) {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+  }, [allResults, filterStatus, filterCheckName, filterSource]);
+
+  // ✅ Pagination auf gefilterte Ergebnisse anwenden
+  const totalPages = Math.ceil(filteredResults.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedResults = allResults.slice(startIndex, startIndex + itemsPerPage);
+  const paginatedResults = filteredResults.slice(startIndex, startIndex + itemsPerPage);
+
+  // ✅ Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, filterCheckName, filterSource]);
 
   const handlePageChange = (page) => {
     setCurrentPage(page);
@@ -335,7 +405,7 @@ export default function SystemHealth() {
               className="mx-auto mb-4"
               fallbackColor="text-slate-500"
             />
-            <h2 className="text-2xl font-bold text-white mb-2">Access Denied</h2>
+            <h2 className="2xl font-bold text-white mb-2">Access Denied</h2>
             <p className="text-slate-400">This area is restricted to administrators only.</p>
           </CardContent>
         </Card>
@@ -654,7 +724,7 @@ export default function SystemHealth() {
       )}
 
       {/* Health Checks - New Compact Design */}
-      <div className="space-y-3 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {healthChecks.map((check, index) => {
           const isRunning = runningChecks[check.id];
 
@@ -665,44 +735,42 @@ export default function SystemHealth() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 + index * 0.05 }}
             >
-              <Card className="bg-slate-800/40 backdrop-blur-sm border-slate-700 hover:bg-slate-800/60 transition-colors">
-                <CardContent className="p-6">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-white mb-2">{check.name}</h3>
-                      <p className="text-slate-400 text-sm mb-3">{check.description}</p>
-                    </div>
-                    
-                    <Button
-                      onClick={() => runCheck(check.id)}
-                      disabled={isRunning}
-                      className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 ml-4"
-                    >
-                      {isRunning ? (
-                        <>
-                          <ConfiguredIcon
-                            iconName="Loader2"
-                            iconConfig={iconConfigs['Loader2']}
-                            size="w-4 h-4"
-                            className="mr-2 animate-spin"
-                            fallbackColor="currentColor"
-                          />
-                          Running...
-                        </>
-                      ) : (
-                        <>
-                          <ConfiguredIcon
-                            iconName="PlayCircle"
-                            iconConfig={iconConfigs['PlayCircle']}
-                            size="w-4 h-4"
-                            className="mr-2"
-                            fallbackColor="currentColor"
-                          />
-                          Manual Check
-                        </>
-                      )}
-                    </Button>
+              <Card className="bg-slate-800/40 backdrop-blur-sm border-slate-700 hover:bg-slate-800/60 transition-colors h-full">
+                <CardContent className="p-6 flex flex-col h-full">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-bold text-white mb-2">{check.name}</h3>
+                    <p className="text-slate-400 text-sm mb-4">{check.description}</p>
                   </div>
+                  
+                  <Button
+                    onClick={() => runCheck(check.id)}
+                    disabled={isRunning}
+                    className="w-full bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700"
+                  >
+                    {isRunning ? (
+                      <>
+                        <ConfiguredIcon
+                          iconName="Loader2"
+                          iconConfig={iconConfigs['Loader2']}
+                          size="w-4 h-4"
+                          className="mr-2 animate-spin"
+                          fallbackColor="currentColor"
+                        />
+                        Running...
+                      </>
+                    ) : (
+                      <>
+                        <ConfiguredIcon
+                          iconName="PlayCircle"
+                          iconConfig={iconConfigs['PlayCircle']}
+                          size="w-4 h-4"
+                          className="mr-2"
+                          fallbackColor="currentColor"
+                        />
+                        Manual Check
+                      </>
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             </motion.div>
@@ -722,6 +790,268 @@ export default function SystemHealth() {
             <CardTitle className="text-white">Recent Check History</CardTitle>
           </CardHeader>
           <CardContent>
+            {/* ✅ NEU: Filter UI */}
+            <div className="mb-6 space-y-4">
+              {/* Status Filter */}
+              <div>
+                <label className="text-slate-400 text-sm mb-2 block">Filter by Status</label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => setFilterStatus('all')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterStatus === 'all' ? 'active' : ''}`}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    onClick={() => setFilterStatus('success')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterStatus === 'success' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="CheckCircle"
+                      iconConfig={iconConfigs['CheckCircle']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Healthy
+                  </Button>
+                  <Button
+                    onClick={() => setFilterStatus('degraded')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterStatus === 'degraded' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="AlertTriangle"
+                      iconConfig={iconConfigs['AlertTriangle']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Degraded
+                  </Button>
+                  <Button
+                    onClick={() => setFilterStatus('fail')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterStatus === 'fail' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="XCircle"
+                      iconConfig={iconConfigs['XCircle']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Failed
+                  </Button>
+                </div>
+              </div>
+
+              {/* Check Name Filter */}
+              <div>
+                <label className="text-slate-400 text-sm mb-2 block">Filter by Check</label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => setFilterCheckName('all')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterCheckName === 'all' ? 'active' : ''}`}
+                  >
+                    All Checks
+                  </Button>
+                  <Button
+                    onClick={() => setFilterCheckName('Mempool API')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterCheckName === 'Mempool API' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Activity"
+                      iconConfig={iconConfigs['Activity']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Mempool API
+                  </Button>
+                  <Button
+                    onClick={() => setFilterCheckName('Alby Lightning')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterCheckName === 'Alby Lightning' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Zap"
+                      iconConfig={iconConfigs['Zap']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Alby Lightning
+                  </Button>
+                  <Button
+                    onClick={() => setFilterCheckName('Nostr Relays')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterCheckName === 'Nostr Relays' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Radio"
+                      iconConfig={iconConfigs['Radio']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Nostr Relays
+                  </Button>
+                </div>
+              </div>
+
+              {/* Source Filter */}
+              <div>
+                <label className="text-slate-400 text-sm mb-2 block">Filter by Source</label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => setFilterSource('all')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'all' ? 'active' : ''}`}
+                  >
+                    All Sources
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('cron_job')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'cron_job' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Clock"
+                      iconConfig={iconConfigs['Clock']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Cron
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('status_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'status_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Activity"
+                      iconConfig={iconConfigs['Activity']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Status Page
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('system_health_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'system_health_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="Server"
+                      iconConfig={iconConfigs['Server']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    System Health
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('activity_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'activity_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon 
+                      iconName="Globe2"
+                      iconConfig={iconConfigs['Globe2']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Activity
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('treasury_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'treasury_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon 
+                      iconName="Wallet"
+                      iconConfig={iconConfigs['Wallet']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Treasury
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('donate_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'donate_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon 
+                      iconName="Heart"
+                      iconConfig={iconConfigs['Heart']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Donate
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('engage_page')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'engage_page' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon 
+                      iconName="Handshake"
+                      iconConfig={iconConfigs['Handshake']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Engage
+                  </Button>
+                  <Button
+                    onClick={() => setFilterSource('manual')}
+                    variant="ghost"
+                    className={`filter-chip h-auto hover:text-white ${filterSource === 'manual' ? 'active' : ''}`}
+                  >
+                    <ConfiguredIcon
+                      iconName="User"
+                      iconConfig={iconConfigs['User']}
+                      size="w-3 h-3"
+                      className="mr-1"
+                      fallbackColor="currentColor"
+                    />
+                    Manual
+                  </Button>
+                </div>
+              </div>
+
+              {/* ✅ Filter Summary */}
+              {(filterStatus !== 'all' || filterCheckName !== 'all' || filterSource !== 'all') && (
+                <div className="flex items-center justify-between pt-2 border-t border-slate-700">
+                  <p className="text-slate-400 text-sm">
+                    Showing {filteredResults.length} of {allResults.length} checks
+                  </p>
+                  <Button
+                    onClick={() => {
+                      setFilterStatus('all');
+                      setFilterCheckName('all');
+                      setFilterSource('all');
+                    }}
+                    variant="ghost"
+                    className="text-orange-400 hover:text-orange-300 text-sm"
+                  >
+                    Clear all filters
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* ✅ Results Table/List */}
             {showRefreshSkeleton ? (
               // Short skeleton for refresh indicator (5 items)
               <div className="space-y-3">
@@ -762,8 +1092,18 @@ export default function SystemHealth() {
                   </div>
                 ))}
               </div>
-            ) : allResults.length === 0 ? (
-              <p className="text-slate-400 text-center py-8">No health check history yet</p>
+            ) : filteredResults.length === 0 ? (
+              <div className="text-center py-12">
+                <ConfiguredIcon
+                  iconName="Filter"
+                  iconConfig={iconConfigs['Filter']}
+                  size="w-12 h-12"
+                  className="mx-auto mb-4"
+                  fallbackColor="text-slate-600"
+                />
+                <p className="text-slate-400 text-lg mb-2">No results found</p>
+                <p className="text-slate-500 text-sm">Try adjusting your filters</p>
+              </div>
             ) : (
               <>
                 {/* Desktop Table Header */}
@@ -778,11 +1118,18 @@ export default function SystemHealth() {
 
                 <div className="md:bg-slate-800/50 md:backdrop-blur-sm md:border-x md:border-b md:border-slate-700 md:rounded-b-xl">
                   {paginatedResults.map((result, index) => {
-                    // Determine source badge
+                    // ✅ ANGEPASSTE Source Badge Logik mit Session-ID Support
                     let sourceBadge = null;
-                    if (result.triggered_by === 'cron') {
+                    
+                    // Normalize triggered_by for matching
+                    const triggeredBy = result.triggered_by || '';
+                    
+                    if (triggeredBy === 'cron' || triggeredBy === 'cron_job') {
                       sourceBadge = (
-                        <Badge className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+                        <Badge 
+                          className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Clock"
                             iconConfig={iconConfigs['Clock']}
@@ -793,9 +1140,12 @@ export default function SystemHealth() {
                           Cron
                         </Badge>
                       );
-                    } else if (result.triggered_by === 'status_page') {
+                    } else if (triggeredBy.startsWith('status_page')) {
                       sourceBadge = (
-                        <Badge className="bg-purple-500/20 text-purple-300 border-purple-500/30 text-xs">
+                        <Badge 
+                          className="bg-purple-500/20 text-purple-300 border-purple-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Activity"
                             iconConfig={iconConfigs['Activity']}
@@ -806,9 +1156,28 @@ export default function SystemHealth() {
                           Status Page
                         </Badge>
                       );
-                    } else if (result.triggered_by === 'activity_page') {
+                    } else if (triggeredBy.startsWith('system_health_page')) {
                       sourceBadge = (
-                        <Badge className="bg-indigo-500/20 text-indigo-300 border-indigo-500/30 text-xs">
+                        <Badge 
+                          className="bg-indigo-500/20 text-indigo-300 border-indigo-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
+                          <ConfiguredIcon 
+                            iconName="Server"
+                            iconConfig={iconConfigs['Server']}
+                            size="w-3 h-3"
+                            className="mr-1"
+                            fallbackColor="currentColor"
+                          />
+                          System Health
+                        </Badge>
+                      );
+                    } else if (triggeredBy.startsWith('activity_page')) {
+                      sourceBadge = (
+                        <Badge 
+                          className="bg-teal-500/20 text-teal-300 border-teal-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Globe2"
                             iconConfig={iconConfigs['Globe2']}
@@ -819,9 +1188,12 @@ export default function SystemHealth() {
                           Activity
                         </Badge>
                       );
-                    } else if (result.triggered_by === 'treasury_page') {
+                    } else if (triggeredBy.startsWith('treasury_page')) {
                       sourceBadge = (
-                        <Badge className="bg-green-500/20 text-green-300 border-green-500/30 text-xs">
+                        <Badge 
+                          className="bg-green-500/20 text-green-300 border-green-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Wallet"
                             iconConfig={iconConfigs['Wallet']}
@@ -832,9 +1204,12 @@ export default function SystemHealth() {
                           Treasury
                         </Badge>
                       );
-                    } else if (result.triggered_by === 'donate_page') {
+                    } else if (triggeredBy.startsWith('donate_page')) {
                       sourceBadge = (
-                        <Badge className="bg-pink-500/20 text-pink-300 border-pink-500/30 text-xs">
+                        <Badge 
+                          className="bg-pink-500/20 text-pink-300 border-pink-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Heart"
                             iconConfig={iconConfigs['Heart']}
@@ -845,9 +1220,12 @@ export default function SystemHealth() {
                           Donate
                         </Badge>
                       );
-                    } else if (result.triggered_by === 'engage_page') {
+                    } else if (triggeredBy.startsWith('engage_page')) {
                       sourceBadge = (
-                        <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-xs">
+                        <Badge 
+                          className="bg-yellow-500/20 text-yellow-300 border-yellow-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="Handshake"
                             iconConfig={iconConfigs['Handshake']}
@@ -858,9 +1236,12 @@ export default function SystemHealth() {
                           Engage
                         </Badge>
                       );
-                    } else if (result.triggered_by?.startsWith('user_')) {
+                    } else if (triggeredBy.startsWith('admin_user:') || triggeredBy.startsWith('user_')) {
                       sourceBadge = (
-                        <Badge className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs">
+                        <Badge 
+                          className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
                           <ConfiguredIcon 
                             iconName="User"
                             iconConfig={iconConfigs['User']}
@@ -869,6 +1250,22 @@ export default function SystemHealth() {
                             fallbackColor="currentColor"
                           />
                           Manual
+                        </Badge>
+                      );
+                    } else if (triggeredBy) { // ✅ Fallback für unbekannte Sources
+                      sourceBadge = (
+                        <Badge 
+                          className="bg-slate-500/20 text-slate-300 border-slate-500/30 text-xs cursor-help"
+                          title={`Source: ${triggeredBy}`}
+                        >
+                          <ConfiguredIcon 
+                            iconName="HelpCircle"
+                            iconConfig={iconConfigs['HelpCircle']}
+                            size="w-3 h-3"
+                            className="mr-1"
+                            fallbackColor="currentColor"
+                          />
+                          Unknown
                         </Badge>
                       );
                     }
@@ -935,7 +1332,7 @@ export default function SystemHealth() {
                         onClick={() => handlePageChange(currentPage - 1)}
                         disabled={currentPage === 1}
                         variant="ghost"
-                        className={`filter-chip h-auto ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        className={`h-auto ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-800'}`}
                       >
                         ←
                       </Button>
@@ -948,7 +1345,7 @@ export default function SystemHealth() {
                               <Button
                                 onClick={() => handlePageChange(page)}
                                 variant="ghost"
-                                className={`filter-chip h-auto w-10 ${currentPage === page ? 'active' : ''}`}
+                                className={`h-auto w-10 ${currentPage === page ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
                               >
                                 {page}
                               </Button>
@@ -959,13 +1356,13 @@ export default function SystemHealth() {
                         onClick={() => handlePageChange(currentPage + 1)}
                         disabled={currentPage === totalPages}
                         variant="ghost"
-                        className={`filter-chip h-auto ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        className={`h-auto ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-800'}`}
                       >
                         →
                       </Button>
                     </div>
                     <div className="text-slate-400 text-sm text-center">
-                      Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, allResults.length)} of {allResults.length} checks
+                      Showing {startIndex + 1}-{Math.min(startIndex + itemsPerPage, filteredResults.length)} of {filteredResults.length} checks
                     </div>
                   </div>
                 )}

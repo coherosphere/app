@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -196,37 +197,39 @@ export default function LocalKeypairSignInModal({ isOpen, onClose, onSignIn }) {
                     onClick={(e) => e.stopPropagation()}
                 >
                     <Card className="bg-slate-800/95 backdrop-blur-sm border-slate-700">
-                        <CardHeader className="relative pb-4">
+                        <CardHeader className="relative pb-6 border-b border-slate-700">
                             <Button
                                 variant="ghost"
                                 size="icon"
-                                className="absolute top-4 right-4 text-slate-400 hover:text-white"
+                                className="absolute top-4 right-4 text-slate-400 hover:text-white hover:bg-slate-700"
                                 onClick={onClose}
                             >
-                                <X className="w-5 h-5" />
+                                <X className="w-5 h-5 text-white" />
                             </Button>
                             
-                            <div className="flex items-center gap-3 mb-2">
-                                <div className="w-12 h-12 rounded-full bg-gradient-to-r from-blue-500/20 to-cyan-500/20 border border-blue-500/30 flex items-center justify-center">
-                                    <Key className="w-6 h-6 text-blue-400" />
+                            <div className="flex items-center gap-4 mb-3">
+                                <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500/20 to-cyan-500/20 border-2 border-blue-500/30 flex items-center justify-center flex-shrink-0">
+                                    <Key className="w-7 h-7 text-white" />
                                 </div>
-                                <CardTitle className="text-xl text-white">
-                                    Sign In with Local Keypair
-                                </CardTitle>
+                                <div>
+                                    <CardTitle className="text-2xl text-white leading-tight">
+                                        Sign In with Local Keypair
+                                    </CardTitle>
+                                </div>
                             </div>
-                            <p className="text-slate-400 text-sm">
+                            <p className="text-slate-400 text-sm leading-relaxed">
                                 Enter your password to unlock your locally stored Nostr keypair
                             </p>
                         </CardHeader>
                         
-                        <CardContent className="space-y-6">
+                        <CardContent className="p-6 space-y-6">
                             {/* Password Input */}
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-300">
+                            <div className="space-y-3">
+                                <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                                    <Lock className="w-4 h-4 text-white" />
                                     Password
                                 </label>
                                 <div className="relative">
-                                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                                     <Input
                                         type={showPassword ? 'text' : 'password'}
                                         value={password}
@@ -237,14 +240,15 @@ export default function LocalKeypairSignInModal({ isOpen, onClose, onSignIn }) {
                                             }
                                         }}
                                         placeholder="Enter your password"
-                                        className="pl-10 pr-10 bg-slate-900/50 border-slate-700 text-white"
+                                        className="pl-4 pr-12 bg-slate-900/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20"
                                         disabled={isLoading}
+                                        autoFocus
                                     />
                                     <Button
                                         type="button"
                                         variant="ghost"
                                         size="icon"
-                                        className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-slate-500 hover:text-slate-300"
+                                        className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-white hover:text-white hover:bg-slate-700"
                                         onClick={() => setShowPassword(!showPassword)}
                                         disabled={isLoading}
                                     >
@@ -258,36 +262,51 @@ export default function LocalKeypairSignInModal({ isOpen, onClose, onSignIn }) {
                                 <motion.div
                                     initial={{ opacity: 0, y: -10 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 flex items-start gap-2"
+                                    className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 flex items-start gap-3"
                                 >
-                                    <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
-                                    <p className="text-red-400 text-sm">{error}</p>
+                                    <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" />
+                                    <p className="text-red-400 text-sm leading-relaxed">{error}</p>
                                 </motion.div>
                             )}
 
-                            {/* Sign In Button */}
-                            <Button
-                                onClick={handleSignIn}
-                                disabled={isLoading || !password}
-                                className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-3"
-                            >
-                                {isLoading ? (
-                                    <>
-                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                        Signing In...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Key className="w-4 h-4 mr-2" />
-                                        Sign In
-                                    </>
-                                )}
-                            </Button>
+                            {/* Action Buttons */}
+                            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                                <Button
+                                    onClick={onClose}
+                                    variant="outline"
+                                    disabled={isLoading}
+                                    className="flex-1 btn-secondary-coherosphere"
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={handleSignIn}
+                                    disabled={isLoading || !password}
+                                    className="flex-1 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-semibold py-3"
+                                >
+                                    {isLoading ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin text-white" />
+                                            Signing In...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Key className="w-4 h-4 mr-2 text-white" />
+                                            Sign In
+                                        </>
+                                    )}
+                                </Button>
+                            </div>
 
-                            {/* Help Text */}
-                            <p className="text-xs text-slate-500 text-center">
-                                Your private key is decrypted locally and used to sign the authentication request. It never leaves your device.
-                            </p>
+                            {/* Security Note */}
+                            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                                <div className="flex items-start gap-3">
+                                    <Lock className="w-5 h-5 text-white flex-shrink-0 mt-0.5" />
+                                    <p className="text-xs text-blue-200 leading-relaxed">
+                                        Your private key is decrypted locally and used to sign the authentication request. It never leaves your device.
+                                    </p>
+                                </div>
+                            </div>
                         </CardContent>
                     </Card>
                 </motion.div>

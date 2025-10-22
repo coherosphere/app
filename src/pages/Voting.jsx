@@ -1,10 +1,11 @@
-
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Proposal, Vote, User } from "@/api/entities";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Link } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
 
 import ResonanceVisualizer from "@/components/voting/ResonanceVisualizer";
 import VoteStats from "@/components/voting/VoteStats";
@@ -13,6 +14,20 @@ import { useLoading } from '@/components/loading/LoadingContext';
 import { useCachedData, useCachedMutation } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from '@/components/StatCard';
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 export default function Voting() {
   const [selectedFilter, setSelectedFilter] = useState('all');
@@ -27,9 +42,14 @@ export default function Voting() {
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
 
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = useRef(null);
+
   // Progressive Loading States - sections load in parallel
   const [sectionsReady, setSectionsReady] = useState({
-    topStats: false,
+    stats: false,
     filters: false,
     proposals: false,
     documents: false
@@ -57,6 +77,32 @@ export default function Voting() {
     'governance'
   );
 
+  // --- Daten laden für Stats ---
+  // 1. Stat Konfigurationen laden (alle)
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['Voting', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'voting'
+  );
+
+  // 2. Stat Werte laden (alle)
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['Voting', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'voting'
+  );
+
+  // 3. AppConfig für die Anzeigereihenfolge laden
+  const { data: appConfigList = [] } = useCachedData(
+    ['Voting', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'voting'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Voting'] || appConfig?.stat_display_order || [];
+
   // Combine loading states
   const isLoading = userLoading || proposalsLoading || votesLoading;
 
@@ -64,6 +110,122 @@ export default function Voting() {
   useEffect(() => {
     setLoading(isLoading);
   }, [isLoading, setLoading]);
+
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für Voting-Seite filtern
+  const activeStatsForVoting = useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Voting')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder
+  const sortedStatConfigs = useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForVoting].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForVoting.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForVoting, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = (config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  };
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik
+  useEffect(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length <= 1) return;
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
 
   // Process votes into a map, memoized for performance
   const votesByProposal = React.useMemo(() => {
@@ -86,30 +248,29 @@ export default function Voting() {
     });
   }, [proposals, votes]);
 
-  // Track when each section's data is ready (parallel loading)
+  // Track when stats section is ready
   useEffect(() => {
-    // Top stats ready when proposals and votes loaded
-    if (!proposalsLoading && !votesLoading) {
-      setSectionsReady(prev => ({ ...prev, topStats: true }));
+    if (!statsConfigLoading && !statsValuesLoading) {
+      setSectionsReady(prev => ({ ...prev, stats: true }));
     }
-  }, [proposalsLoading, votesLoading]);
+  }, [statsConfigLoading, statsValuesLoading]);
 
+  // Track when filters section is ready
   useEffect(() => {
-    // Filters ready when proposals loaded
     if (!proposalsLoading) {
       setSectionsReady(prev => ({ ...prev, filters: true }));
     }
   }, [proposalsLoading]);
 
+  // Track when proposals list is ready
   useEffect(() => {
-    // Proposals list ready when all data loaded
     if (!proposalsLoading && !votesLoading && !userLoading) {
       setSectionsReady(prev => ({ ...prev, proposals: true }));
     }
   }, [proposalsLoading, votesLoading, userLoading]);
 
+  // Track when documents section is ready
   useEffect(() => {
-    // Documents section always ready (no data dependency)
     setSectionsReady(prev => ({ ...prev, documents: true }));
   }, []);
 
@@ -259,19 +420,45 @@ export default function Voting() {
     return `${diffHours} hour${diffHours > 1 ? 's' : ''} left`;
   };
 
-  // Skeleton Components
-  const StatsCardSkeleton = () => (
-    <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-      <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-        <div className="flex items-center justify-center mb-1.5">
-          <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-        </div>
-        <div className="h-6 w-12 mx-auto bg-slate-700/30 animate-pulse rounded mb-0.5" />
-        <div className="h-3 w-24 mx-auto bg-slate-700/30 animate-pulse rounded" />
-      </CardContent>
-    </Card>
-  );
+  // --- Render Funktionen für Stat Cards ---
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
 
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
+
+  // Skeleton Components
   const FiltersSkeleton = () => (
     <div className="mb-8">
       <div className="bg-slate-800/30 backdrop-blur-sm border border-slate-700 rounded-xl p-6">
@@ -347,86 +534,84 @@ export default function Voting() {
         </p>
       </div>
 
-      {/* Top Stats - Progressive Loading */}
-      {sectionsReady.topStats ? (
-        <motion.div
-          className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.18, delay: 0 }}
-        >
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex justify-center mb-1.5">
-                <ConfiguredIcon 
-                  iconName="Vote"
-                  iconConfig={iconConfigs['Vote']}
-                  size="w-5 h-5"
-                  fallbackColor="text-orange-400"
-                />
+      {/* Voting Stats - KORRIGIERT: Identisch zu Dashboard mit initialem "Loading statistics..." */}
+      {statsConfigLoading ? (
+        <div className="mb-8">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <div className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </div>
+          </div>
+        </div>
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-8 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
+                  >
+                    <ConfiguredIcon
+                      iconName="ChevronLeft"
+                      iconConfig={iconConfigs['ChevronLeft']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
+                    />
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ConfiguredIcon
+                      iconName="ChevronRight"
+                      iconConfig={iconConfigs['ChevronRight']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
+                    />
+                  </button>
+                )}
               </div>
-              <div className="text-lg font-bold text-white">{stats.totalProposals}</div>
-              <div className="text-slate-400 text-xs">Total Proposals</div>
-            </CardContent>
-          </Card>
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex justify-center mb-1.5">
-                <ConfiguredIcon 
-                  iconName="Clock"
-                  iconConfig={iconConfigs['Clock']}
-                  size="w-5 h-5"
-                  fallbackColor="text-blue-400"
-                />
-              </div>
-              <div className="text-lg font-bold text-white">{stats.votingProposals}</div>
-              <div className="text-slate-400 text-xs">Voting Now</div>
-            </CardContent>
-          </Card>
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex justify-center mb-1.5">
-                <ConfiguredIcon 
-                  iconName="TrendingUp"
-                  iconConfig={iconConfigs['TrendingUp']}
-                  size="w-5 h-5"
-                  fallbackColor="text-green-400"
-                />
-              </div>
-              <div className="text-lg font-bold text-white">{stats.totalVotes}</div>
-              <div className="text-slate-400 text-xs">Total Votes Cast</div>
-            </CardContent>
-          </Card>
-        </motion.div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-8"
+            style={{
+              gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex items-center justify-center mb-1.5">
-                <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-              </div>
-              <div className="h-6 w-12 mx-auto bg-slate-700/30 animate-pulse rounded mb-0.5" />
-              <div className="h-3 w-24 mx-auto bg-slate-700/30 animate-pulse rounded" />
-            </CardContent>
-          </Card>
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex items-center justify-center mb-1.5">
-                <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-              </div>
-              <div className="h-6 w-12 mx-auto bg-slate-700/30 animate-pulse rounded mb-0.5" />
-              <div className="h-3 w-20 mx-auto bg-slate-700/30 animate-pulse rounded" />
-            </CardContent>
-          </Card>
-          <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-            <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-              <div className="flex items-center justify-center mb-1.5">
-                <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-              </div>
-              <div className="h-6 w-12 mx-auto bg-slate-700/30 animate-pulse rounded mb-0.5" />
-              <div className="h-3 w-28 mx-auto bg-slate-700/30 animate-pulse rounded" />
-            </CardContent>
-          </Card>
+        <div className="mb-8 text-center py-8 text-slate-400">
+          <p>No stats configured for Voting. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
         </div>
       )}
 

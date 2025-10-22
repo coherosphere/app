@@ -109,3 +109,19 @@ export const getNostrApiConfig = base44.functions.getNostrApiConfig;
 
 export const proxyNostrAuth = base44.functions.proxyNostrAuth;
 
+export const hexToNpub = base44.functions.hexToNpub;
+
+export const ensureNostrUser = base44.functions.ensureNostrUser;
+
+export const updateNostrUserProfile = base44.functions.updateNostrUserProfile;
+
+export const updateAllStatValuesGovernance = base44.functions.updateAllStatValuesGovernance;
+
+export const updateAllStatValuesLearning = base44.functions.updateAllStatValuesLearning;
+
+export const updateAllStatValuesTreasury = base44.functions.updateAllStatValuesTreasury;
+
+export const updateAllStatValuesActivity = base44.functions.updateAllStatValuesActivity;
+
+export const updateAllStatValuesHubs = base44.functions.updateAllStatValuesHubs;
+

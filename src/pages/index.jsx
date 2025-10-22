@@ -96,6 +96,8 @@ import AuthTest from "./AuthTest";
 
 import Nostr from "./Nostr";
 
+import NostrProfile from "./NostrProfile";
+
 import { BrowserRouter as Router, Route, Routes, useLocation } from 'react-router-dom';
 
 const PAGES = {
@@ -195,6 +197,8 @@ const PAGES = {
     AuthTest: AuthTest,
     
     Nostr: Nostr,
+    
+    NostrProfile: NostrProfile,
     
 }
 
@@ -318,6 +322,8 @@ function PagesContent() {
                 <Route path="/AuthTest" element={<AuthTest />} />
                 
                 <Route path="/Nostr" element={<Nostr />} />
+                
+                <Route path="/NostrProfile" element={<NostrProfile />} />
                 
             </Routes>
         </Layout>

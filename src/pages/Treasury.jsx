@@ -7,14 +7,30 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import { base44 } from "@/api/base44Client";
 
-import TreasuryStats from "@/components/treasury/TreasuryStats";
 import TransactionRow from "@/components/treasury/TransactionRow";
 import { useLoading } from '@/components/loading/LoadingContext';
 import { useCachedData } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from '@/components/StatCard';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { createPageUrl } from '@/utils';
 
 const BITCOIN_ADDRESS = "bc1q7davwh4083qrw8dsnazavamul4ngam99zt7nfy";
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 export default function Treasury() {
   const [selectedFilters, setSelectedFilters] = useState(['all']);
@@ -26,9 +42,14 @@ export default function Treasury() {
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
 
-  // Progressive Loading States
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = React.useRef(null);
+
+  // Progressive Loading States - ALTE oldStats entfernt
   const [sectionsReady, setSectionsReady] = useState({
-    stats: false,
+    stats: false,    // Neue dynamische Stats
     filters: false,
     transactions: false
   });
@@ -45,6 +66,34 @@ export default function Treasury() {
     () => base44.functions.invoke('checkApiStatus', { source: 'treasury_page' }),
     'treasury'
   );
+
+  // --- Daten laden für Stats ---
+  // 1. Stat Konfigurationen laden (alle)
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['treasury', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'treasury'
+  );
+
+  // 2. Stat Werte laden (alle)
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['treasury', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'treasury'
+  );
+
+  // 3. AppConfig für die Anzeigereihenfolge laden
+  const { data: appConfigList = [] } = useCachedData(
+    ['treasury', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'treasury'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+
+  // Page-spezifische Anzeigereihenfolge aus AppConfig
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Treasury'] || appConfig?.stat_display_order || [];
 
   // Sync React Query's loading state with the global loading context
   useEffect(() => {
@@ -108,12 +157,14 @@ export default function Treasury() {
   }, [apiData, getBitcoinTxAmount]);
 
   // Track when each section's data is ready (parallel loading)
+  // ENTFERNT: useEffect für oldStats
+  
   useEffect(() => {
-    // Stats ready when data loaded and transactions available
-    if (!isQueryLoading && transactions.length >= 0) {
+    // New stats ready when config and values loaded
+    if (!statsConfigLoading && !statsValuesLoading) {
       setSectionsReady(prev => ({ ...prev, stats: true }));
     }
-  }, [isQueryLoading, transactions]);
+  }, [statsConfigLoading, statsValuesLoading]);
 
   useEffect(() => {
     // Filters ready when transactions loaded
@@ -128,6 +179,160 @@ export default function Treasury() {
       setSectionsReady(prev => ({ ...prev, transactions: true }));
     }
   }, [isQueryLoading, transactions]);
+
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = React.useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für Treasury-Seite filtern
+  const activeStatsForThisPage = React.useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Treasury')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder
+  const sortedStatConfigs = React.useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForThisPage].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForThisPage.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForThisPage, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = useCallback((config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  }, []);
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik - KORRIGIERT: Auch bei 2 Stats Pfeile zeigen
+  useEffect(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length === 0) return; // Nur bei 0 Stats keine Pfeile
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
+
+  // Render-Funktionen für Stat-Karten - KORRIGIERT: isLoading Prop nutzen
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={statsValuesLoading}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={statsValuesLoading}
+        />
+      );
+    });
+  };
 
   const handleRefresh = () => {
     refetch();
@@ -215,23 +420,7 @@ export default function Treasury() {
   const lastRefresh = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
   const error = queryError?.message || null;
 
-  // Skeleton Components
-  const StatsSkeleton = () => (
-    <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-      {[1, 2, 3, 4].map((i) => (
-        <Card key={i} className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-          <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-            <div className="flex justify-center mb-1.5">
-              <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-            </div>
-            <div className="h-6 w-20 mx-auto bg-slate-700/30 animate-pulse rounded mb-0.5" />
-            <div className="h-3 w-24 mx-auto bg-slate-700/30 animate-pulse rounded" />
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-
+  // Skeleton Components (kept here as per original file structure for these)
   const FiltersSkeleton = () => (
     <div className="flex flex-wrap gap-2 mb-6">
       {[1, 2, 3, 4, 5].map((i) => (
@@ -329,17 +518,77 @@ export default function Treasury() {
         </Alert>
       )}
 
-      {/* Treasury Stats - Progressive Loading */}
-      {sectionsReady.stats ? (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.18, delay: 0 }}
-        >
-          <TreasuryStats {...stats} isLoading={false} />
-        </motion.div>
+      {/* ALTE TreasuryStats KOMPONENTE ENTFERNT */}
+
+      {/* NEW Dynamic Stats Section - KORRIGIERT: 3-stufiges Loading wie Dashboard */}
+      {statsConfigLoading ? (
+        <div className="mb-8">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <div className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </div>
+          </div>
+        </div>
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-8 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-8"
+            style={{
+              gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
       ) : (
-        <StatsSkeleton />
+        <div className="mb-8 text-center py-8 text-slate-400">
+          <p>No stats configured for Treasury. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
+        </div>
       )}
       
       {/* Transaction Filters - Progressive Loading */}

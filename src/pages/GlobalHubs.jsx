@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { Hub, Project, Event, ResonanceScore } from "@/api/entities";
 import { motion } from "framer-motion";
@@ -11,17 +10,38 @@ import { useLoading } from '@/components/loading/LoadingContext';
 import { useCachedData } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
+import StatCard from '@/components/StatCard';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { base44 } from '@/api/base44Client';
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 export default function GlobalHubs() {
   const [copiedId, setCopiedId] = useState(null);
   const { setLoading } = useLoading();
   const { iconConfigs } = useAllIconConfigs();
 
-  // Progressive Loading States - sections load in parallel
+  // Progressive Loading States
   const [sectionsReady, setSectionsReady] = useState({
     stats: false,
     hubsGrid: false
   });
+
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = React.useRef(null);
 
   // Use cached data with correct 'globalHubs' domain
   const { data: hubs = [], isLoading: hubsLoading } = useCachedData(
@@ -48,29 +68,170 @@ export default function GlobalHubs() {
     'globalHubs' 
   );
 
-  const isLoading = hubsLoading || projectsLoading || eventsLoading || resonanceLoading;
+  // --- NEU: Daten laden für dynamische Stats ---
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['GlobalHubs', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'globalHubs'
+  );
+
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['GlobalHubs', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'globalHubs'
+  );
+
+  const { data: appConfigList = [] } = useCachedData(
+    ['GlobalHubs', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'globalHubs'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['GlobalHubs'] || [];
+
+  const isLoading = hubsLoading || projectsLoading || eventsLoading || resonanceLoading || statsConfigLoading || statsValuesLoading;
 
   // Update global loading state
   useEffect(() => {
     setLoading(isLoading);
   }, [isLoading, setLoading]);
 
-  // Track when each section's data is ready (parallel loading)
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = React.useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für GlobalHubs-Seite filtern
+  const activeStatsForGlobalHubs = React.useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('GlobalHubs')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder
+  const sortedStatConfigs = React.useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForGlobalHubs].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForGlobalHubs.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForGlobalHubs, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = (config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  };
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = React.useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = React.useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik
   useEffect(() => {
-    // Stats section is ready when we have projects and events
-    if (!projectsLoading && !eventsLoading && !hubsLoading) {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length <= 1) {
+      setShowLeftArrow(false);
+      setShowRightArrow(false);
+      return;
+    }
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
+
+  // Track when stats data is ready
+  useEffect(() => {
+    if (!statsConfigLoading && !statsValuesLoading && !hubsLoading && !projectsLoading && !eventsLoading) {
       setSectionsReady(prev => ({ ...prev, stats: true }));
     }
-  }, [projectsLoading, eventsLoading, hubsLoading]);
+  }, [statsConfigLoading, statsValuesLoading, hubsLoading, projectsLoading, eventsLoading]);
 
   useEffect(() => {
-    // Hubs grid is ready when all data is loaded
     if (!hubsLoading && !projectsLoading && !eventsLoading && !resonanceLoading) {
       setSectionsReady(prev => ({ ...prev, hubsGrid: true }));
     }
   }, [hubsLoading, projectsLoading, eventsLoading, resonanceLoading]);
 
-  // Enrich hubs with stats
+  // Enrich hubs with stats (keep existing logic for hubsGrid)
   const hubsWithStats = React.useMemo(() => {
     const resonanceMap = new Map();
     allResonanceScores.forEach(score => {
@@ -114,13 +275,43 @@ export default function GlobalHubs() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Calculate stats
-  const stats = React.useMemo(() => ({
-    totalHubs: hubs.length,
-    totalMembers: hubsWithStats.reduce((sum, h) => sum + (h.member_count || 0), 0),
-    totalProjects: hubsWithStats.reduce((sum, h) => sum + (h.totalProjects || 0), 0),
-    totalEvents: hubsWithStats.reduce((sum, h) => sum + (h.totalEvents || 0), 0)
-  }), [hubs, hubsWithStats]);
+  // Render Funktionen für Stat Cards
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
 
   return (
     <div className="p-4 lg:p-8">
@@ -145,56 +336,75 @@ export default function GlobalHubs() {
         </p>
       </div>
 
-      {/* Stats Summary */}
-      {!sectionsReady.stats ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {[1, 2, 3, 4].map((i) => (
-            <Card key={i} className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex items-center justify-center mb-1.5">
-                  <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-                </div>
-                <div className="h-6 w-16 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
-                <div className="h-3 w-24 bg-slate-700/30 animate-pulse rounded mx-auto" />
-              </CardContent>
-            </Card>
-          ))}
+      {/* Dynamische Stats Section */}
+      {statsConfigLoading ? (
+        <div className="mb-8">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <div className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </div>
+          </div>
         </div>
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-8 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
+                  >
+                    <ChevronLeft className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-8"
+            style={{
+              gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
       ) : (
-        <motion.div
-          className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.15 }}
-        >
-          {[
-            { icon: 'Globe2', value: stats.totalHubs, label: 'Total Hubs', delay: 0 },
-            { icon: 'Users', value: stats.totalMembers, label: 'Total Members', delay: 0.05 },
-            { icon: 'Lightbulb', value: stats.totalProjects, label: 'Total Projects', delay: 0.1 },
-            { icon: 'Calendar', value: stats.totalEvents, label: 'Total Events', delay: 0.15 }
-          ].map((stat, index) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, delay: stat.delay }}
-            >
-              <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-                <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                  <div className="flex justify-center mb-1.5">
-                    <ConfiguredIcon 
-                      iconName={stat.icon}
-                      iconConfig={iconConfigs[stat.icon]}
-                      size="w-5 h-5"
-                    />
-                  </div>
-                  <div className="text-lg font-bold text-white">{stat.value}</div>
-                  <div className="text-slate-400 text-xs">{stat.label}</div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </motion.div>
+        <div className="mb-8 text-center py-8 text-slate-400">
+          <p>No stats configured for GlobalHubs. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
+        </div>
       )}
 
       {/* Hubs Grid */}

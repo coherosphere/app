@@ -301,6 +301,26 @@ export default function Profile() {
     }
   };
 
+  const handleNameChange = async (newName) => {
+    if (!user) return;
+
+    try {
+      await User.updateMyUserData({
+        full_name: newName
+      });
+
+      setSaveMessage('Name updated successfully!');
+      await refetchUser();
+      await refreshUser();
+      
+      setTimeout(() => setSaveMessage(null), 3000);
+
+    } catch (err) {
+      console.error('Error updating name:', err);
+      setSaveMessage('Failed to update name. Please try again.');
+    }
+  };
+
   const handlePublishToNostr = async () => {
     if (!user || !canPostToNostr) return;
 
@@ -520,7 +540,7 @@ export default function Profile() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2, delay: 0.05 }}
             >
-              <ProfileHeader user={user} />
+              <ProfileHeader user={user} onNameChange={handleNameChange} />
             </motion.div>
           ) : (
             <SectionSkeleton title="Profile Header" />

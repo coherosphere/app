@@ -229,23 +229,24 @@ export default function StatsAdmin() {
     }
   };
 
-  const handleUpdateValues = async () => {
-    try {
-      setMessage({ type: 'info', text: '⏳ Updating all stat values...' });
-      const response = await base44.functions.invoke('updateAllStatValues');
+  // Removed handleUpdateValues as the button is removed.
+  // const handleUpdateValues = async () => {
+  //   try {
+  //     setMessage({ type: 'info', text: '⏳ Updating all stat values...' });
+  //     const response = await base44.functions.invoke('updateAllStatValues');
 
-      if (response.data.success) {
-        setMessage({ type: 'success', text: `✓ Updated ${response.data.updated_count} stat values` });
-      } else {
-        setMessage({ type: 'error', text: '✗ Failed to update values' });
-      }
+  //     if (response.data.success) {
+  //       setMessage({ type: 'success', text: `✓ Updated ${response.data.updated_count} stat values` });
+  //     } else {
+  //       setMessage({ type: 'error', text: '✗ Failed to update values' });
+  //     }
 
-      setTimeout(() => setMessage(null), 5000);
-    } catch (error) {
-      console.error('Error updating values:', error);
-      setMessage({ type: 'error', text: `✗ Error: ${error.message}` });
-    }
-  };
+  //     setTimeout(() => setMessage(null), 5000);
+  //   } catch (error) {
+  //     console.error('Error updating values:', error);
+  //     setMessage({ type: 'error', text: `✗ Error: ${error.message}` });
+  //   }
+  // };
 
   // Toggle page selection
   const togglePageSelection = (pageName) => {
@@ -548,20 +549,7 @@ export default function StatsAdmin() {
             />
             New Stat
           </Button>
-
-          <Button
-            onClick={handleUpdateValues}
-            variant="outline"
-            className="btn-secondary-coherosphere"
-          >
-            <ConfiguredIcon
-              iconName="RefreshCw"
-              iconConfig={iconConfigs['RefreshCw']}
-              size="w-4 h-4"
-              className="mr-2"
-            />
-            Update All Values
-          </Button>
+          {/* ENTFERNT: Update All Values Button */}
         </div>
 
         <div className="flex gap-2">

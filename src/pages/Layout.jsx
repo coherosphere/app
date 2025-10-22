@@ -26,7 +26,8 @@ import {
   Palette, // Added Palette icon
   Layers, // Added Layers icon for PageAdmin
   Server, // Added Server icon
-  Gauge // Added Gauge icon for StatsAdmin
+  Gauge, // Added Gauge icon for StatsAdmin
+  Key // Added Key icon for NostrProfile
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ManifestoPlayer from "@/components/audio/ManifestoPlayer";
@@ -46,7 +47,7 @@ import FreshnessOverlay from '@/components/caching/FreshnessOverlay';
 import IdleScreensaver from '@/components/IdleScreensaver';
 import { ScreensaverStatusProvider } from '@/components/screensaver/ScreensaverStatusContext';
 import { base44 } from '@/api/base44Client';
-import { useCachedData } from "@/components/caching/useCachedData"; // Added import for useCachedData
+import { useCachedData } from "@/components/caching/useCachedData";
 
 // Create a client for React Query
 const queryClient = new QueryClient({
@@ -133,10 +134,16 @@ const navigationItems = [
   },
   { isDivider: true },
   {
-    title: "My Profile",
-    url: createPageUrl("Profile"),
-    icon: UserCircle,
-    highlightOnPages: ["UserResonance"]
+    title: "My Profile", // Renamed from "My Nostr Profile"
+    url: createPageUrl("NostrProfile"), // URL changed to point to NostrProfile
+    icon: Key, // Icon changed to Key
+    requiresNostrSession: true // Added this property as it was for NostrProfile
+  },
+  {
+    title: "Old Profile", // Renamed from "My Profile"
+    url: createPageUrl("Profile"), // URL unchanged
+    icon: UserCircle, // Icon unchanged
+    highlightOnPages: ["UserResonance"] // Unchanged
   },
   { isDivider: true, adminOnly: true }, // Admin-specific divider added here
   {
@@ -198,6 +205,10 @@ function LayoutContent({ children, currentPageName }) {
   const { isLoading } = useLoading();
   const { policy } = useCachingPolicy();
 
+  // Nostr session check
+  const [hasNostrSession, setHasNostrSession] = useState(false);
+  const [isCheckingNostrSession, setIsCheckingNostrSession] = useState(true);
+
   // Derive page name directly from URL
   const actualPageName = React.useMemo(() => {
     const pathSegments = location.pathname.split('/').filter(Boolean);
@@ -223,6 +234,61 @@ function LayoutContent({ children, currentPageName }) {
     return false;
   };
 
+  // Check for Nostr session
+  useEffect(() => {
+    const checkNostrSession = async () => {
+      try {
+        const response = await base44.functions.invoke('getNostrApiConfig');
+        const apiUrl = response.data?.nostrApiUrl; // Removed default value
+
+        // If no API URL configured, assume no session
+        if (!apiUrl) {
+          console.log('[Layout] No Nostr API URL configured, skipping session check');
+          setHasNostrSession(false);
+          setIsCheckingNostrSession(false);
+          return;
+        }
+
+        const resp = await fetch(apiUrl, {
+          method: 'GET',
+          credentials: 'include'
+        });
+
+        if (resp.status === 200) {
+          const data = await resp.json();
+          setHasNostrSession(!!(data.ok || data.pubkey));
+        } else {
+          setHasNostrSession(false);
+        }
+      } catch (error) {
+        // Silently fail - Nostr auth is optional and might not be configured, temporary network issue, or CORS.
+        console.log(`[Layout] Nostr session check failed (expected if not configured, temporary network issue, or CORS): ${error.message}`);
+        setHasNostrSession(false);
+      } finally {
+        setIsCheckingNostrSession(false);
+      }
+    };
+
+    // Initial check
+    checkNostrSession();
+
+    // Listen for session changes
+    const handleSessionChange = (event) => {
+      setHasNostrSession(event.detail.hasSession);
+      setIsCheckingNostrSession(false);
+    };
+
+    window.addEventListener('nostrSessionChanged', handleSessionChange);
+
+    // Poll every 10 seconds to catch external changes
+    const pollInterval = setInterval(checkNostrSession, 10000);
+
+    return () => {
+      window.removeEventListener('nostrSessionChanged', handleSessionChange);
+      clearInterval(pollInterval);
+    };
+  }, []);
+
   // Helper function to check if menu item should be highlighted
   const isItemActive = (item) => {
     if (location.pathname === item.url) return true;
@@ -236,11 +302,20 @@ function LayoutContent({ children, currentPageName }) {
 
   // Helper function to check if item should be shown
   const shouldShowItem = (item) => {
-    // If it's adminOnly and the current user is not an admin, don't show it.
-    // This applies to both links and dividers marked as adminOnly.
+    // Check admin requirement
     if (item.adminOnly && currentUser?.role !== 'admin') {
       return false;
     }
+
+    // Check Nostr session requirement
+    if (item.requiresNostrSession) {
+      // Während des Checks zeigen wir den Eintrag optimistisch an
+      // Nur wenn der Check abgeschlossen ist UND keine Session vorhanden ist, blenden wir aus
+      if (!isCheckingNostrSession && !hasNostrSession) {
+        return false;
+      }
+    }
+
     return true; // Otherwise, show it (including non-admin-only items and admin-only items for admins)
   };
 
@@ -449,9 +524,9 @@ function LayoutContent({ children, currentPageName }) {
               }
 
               .filter-chip:hover {
-                background-color: var(--color-bg-light);
-                color: var(--color-text-dark);
-                border-color: rgba(0, 0, 0, 0.12);
+                background-color: rgba(255, 255, 255, 0.12); /* Hellerer Hintergrund statt weißer Hintergrund */
+                color: white; /* Weiß statt var(--color-text-dark) */
+                border-color: rgba(255, 106, 0, 0.4);
                 box-shadow: var(--elevation-hover);
                 transform: translateY(-2px);
               }

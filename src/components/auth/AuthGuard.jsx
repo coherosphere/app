@@ -15,8 +15,11 @@ function AuthGuardContent({ children }) {
     User.loginWithRedirect(currentUrl);
   };
 
-  // Show spinner while checking authentication
-  if (!isInitialized || isLoading) {
+  // Show spinner ONLY if:
+  // - Not initialized AND not authenticated (initial load without cached data)
+  // - OR loading AND not authenticated (active login attempt)
+  // Do NOT show spinner if user is already authenticated (prevents flicker on page changes)
+  if ((!isInitialized && !isAuthenticated) || (isLoading && !isAuthenticated)) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
         <motion.div

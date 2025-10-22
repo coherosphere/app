@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import ResourceCard from '@/components/learning/ResourceCard';
 import LearningCircleCard from '@/components/learning/LearningCircleCard';
@@ -15,6 +15,21 @@ import { useCachedData } from '@/components/caching/useCachedData';
 import { useAllIconConfigs } from '@/components/hooks/useIconConfig';
 import ConfiguredIcon from '@/components/learning/ConfiguredIcon';
 import { useQueryClient } from '@tanstack/react-query';
+import { base44 } from '@/api/base44Client';
+import StatCard from '@/components/StatCard';
+
+// Skeleton für einzelne StatCard
+const StatCardSkeleton = () => (
+  <Card className="bg-slate-800/50 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
+    <CardContent className="p-3 h-full flex flex-col justify-center text-center">
+      <div className="flex justify-center mb-1.5">
+        <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
+      </div>
+      <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
+      <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
+    </CardContent>
+  </Card>
+);
 
 export default function Learning() {
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -27,6 +42,11 @@ export default function Learning() {
   const queryClient = useQueryClient();
 
   const itemsPerPage = 20;
+
+  // States für Mobile-Scroll-Navigation
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(false);
+  const mobileStatsScrollRef = useRef(null);
 
   // Progressive Loading States - sections load in parallel
   const [sectionsReady, setSectionsReady] = useState({
@@ -66,18 +86,46 @@ export default function Learning() {
     'learning'
   );
 
-  const isLoading = resourcesLoading || circlesLoading || userLoading || checkInsLoading;
+  // --- Daten laden für Stats ---
+  // 1. Stat Konfigurationen laden (alle)
+  const { data: allStats = [], isLoading: statsConfigLoading } = useCachedData(
+    ['learning', 'statConfigurations'],
+    () => base44.entities.StatConfiguration.list('-sort_order', 500),
+    'learning'
+  );
+
+  // 2. Stat Werte laden (alle)
+  const { data: allValues = [], isLoading: statsValuesLoading } = useCachedData(
+    ['learning', 'statValues'],
+    () => base44.entities.StatValue.list('-timestamp', 500),
+    'learning'
+  );
+
+  // 3. AppConfig für die Anzeigereihenfolge laden
+  const { data: appConfigList = [] } = useCachedData(
+    ['learning', 'appConfig'],
+    () => base44.entities.AppConfig.list(),
+    'learning'
+  );
+
+  const appConfig = appConfigList.find(c => c.config_key === 'global_settings') || null;
+
+  // Page-spezifische Anzeigereihenfolge
+  const displayOrderByPage = appConfig?.stat_display_order_by_page || {};
+  const displayOrder = displayOrderByPage['Learning'] || appConfig?.stat_display_order || [];
+
+  const isLoading = resourcesLoading || circlesLoading || userLoading || checkInsLoading || statsConfigLoading || statsValuesLoading;
 
   useEffect(() => {
     setLoading(isLoading);
   }, [isLoading, setLoading]);
 
-  // Track when each section's data is ready (parallel loading)
+  // Progressive Loading für Stats
   useEffect(() => {
-    if (!resourcesLoading && !circlesLoading && !checkInsLoading) {
+    if (!statsConfigLoading && !statsValuesLoading) {
       setSectionsReady(prev => ({ ...prev, stats: true }));
     }
-  }, [resourcesLoading, circlesLoading, checkInsLoading]);
+  }, [statsConfigLoading, statsValuesLoading]);
 
   useEffect(() => {
     setSectionsReady(prev => ({ ...prev, actions: true }));
@@ -107,11 +155,121 @@ export default function Learning() {
     }
   }, [checkInsLoading]);
 
-  const stats = {
-    knowledge: resources.length,
-    circles: circles.length,
-    checkIns: checkIns.length,
-  };
+  // Map für schnellen Zugriff auf Stat-Werte
+  const valueMap = useMemo(() => {
+    const map = {};
+    allValues.forEach(value => {
+      map[value.stat_key] = value;
+    });
+    return map;
+  }, [allValues]);
+
+  // Aktive Stat-Konfigurationen für Learning-Seite filtern
+  const activeStatsForLearning = useMemo(() => {
+    return allStats.filter(config =>
+      config.is_active === true &&
+      config.display_on_pages &&
+      Array.isArray(config.display_on_pages) &&
+      config.display_on_pages.includes('Learning')
+    );
+  }, [allStats]);
+
+  // Sortierte Stat-Konfigurationen basierend auf displayOrder oder default sort_order
+  const sortedStatConfigs = useMemo(() => {
+    if (!displayOrder || displayOrder.length === 0) {
+      return [...activeStatsForLearning].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }
+
+    const configMap = new Map(activeStatsForLearning.map(config => [config.stat_key, config]));
+    const ordered = [];
+    const unordered = [];
+
+    displayOrder.forEach(key => {
+      if (configMap.has(key)) {
+        ordered.push(configMap.get(key));
+        configMap.delete(key);
+      }
+    });
+
+    unordered.push(...Array.from(configMap.values()));
+    unordered.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+    return [...ordered, ...unordered];
+  }, [activeStatsForLearning, displayOrder]);
+
+  // Funktion zur Formatierung des Stat-Wertes
+  const formatStatValue = useCallback((config, value) => {
+    if (!value) return '—';
+
+    const rawValue = value.value_number !== null ? value.value_number : value.value_string;
+
+    if (rawValue === null || rawValue === undefined) return '—';
+
+    switch (config.format_hint) {
+      case 'number':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'currency':
+        return typeof rawValue === 'number' ? rawValue.toLocaleString() : String(rawValue);
+      case 'percentage':
+        return typeof rawValue === 'number' ? `${rawValue}%` : String(rawValue);
+      case 'time':
+        return String(rawValue);
+      default:
+        return String(rawValue);
+    }
+  }, []);
+
+  // Mobile-Scroll-Position überprüfen
+  const checkScrollPosition = useCallback(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    setShowLeftArrow(scrollLeft > 20);
+    setShowRightArrow(scrollLeft < scrollWidth - clientWidth - 20);
+  }, []);
+
+  // Mobile-Scroll handhaben
+  const handleScroll = useCallback((direction) => {
+    const container = mobileStatsScrollRef.current;
+    if (!container) return;
+
+    const scrollAmount = 140;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+
+    if (direction === 'left') {
+      if (scrollLeft <= 10) {
+        container.scrollLeft = scrollWidth - clientWidth;
+      } else {
+        container.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+      }
+    } else {
+      if (scrollLeft >= scrollWidth - clientWidth - 10) {
+        container.scrollLeft = 0;
+      } else {
+        container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+      }
+    }
+  }, []);
+
+  // Effect für Mobile-Scroll-Logik
+  useEffect(() => {
+    const container = mobileStatsScrollRef.current;
+    if (!container || sortedStatConfigs.length <= 1) return;
+
+    checkScrollPosition();
+    const handleResize = () => checkScrollPosition();
+    const handleScrollEvent = () => checkScrollPosition();
+
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('scroll', handleScrollEvent);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('scroll', handleScrollEvent);
+    };
+  }, [checkScrollPosition, sortedStatConfigs]);
 
   const handleCircleUpdate = async () => {
     // Invalidate all relevant caches to trigger refetch
@@ -155,6 +313,44 @@ export default function Learning() {
     return resources.filter(r => r.category && r.category.replace(/ & /g, '').replace(/ /g, '') === categoryKey).length;
   };
 
+  // Render-Funktionen für Stat-Karten
+  const renderStatCardsMobile = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <div key={config.id} className="snap-start flex-shrink-0 w-[128px]">
+          <StatCard
+            iconName={config.icon_name}
+            iconConfig={iconConfigs[config.icon_name]}
+            value={formattedValue}
+            label={config.display_name}
+            isLoading={false}
+          />
+        </div>
+      );
+    });
+  };
+
+  const renderStatCardsGridDesktop = () => {
+    return sortedStatConfigs.map((config) => {
+      const value = valueMap[config.stat_key];
+      const formattedValue = formatStatValue(config, value);
+
+      return (
+        <StatCard
+          key={config.id}
+          iconName={config.icon_name}
+          iconConfig={iconConfigs[config.icon_name]}
+          value={formattedValue}
+          label={config.display_name}
+          isLoading={false}
+        />
+      );
+    });
+  };
+
   return (
     <div className="p-4 lg:p-8 text-white bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       {/* Header - ALWAYS VISIBLE with final content immediately */}
@@ -178,55 +374,85 @@ export default function Learning() {
         </p>
       </div>
       
-      {/* Stats Section */}
+      {/* Stats Section - KORRIGIERT: Identisch zu Dashboard mit initialem "Loading statistics..." */}
       {!sectionsReady.stats ? (
-        <div className="grid grid-cols-3 gap-4 mb-8">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-              <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                <div className="flex items-center justify-center mb-1.5">
-                  <div className="w-5 h-5 bg-slate-700/30 animate-pulse rounded" />
-                </div>
-                <div className="h-6 w-12 bg-slate-700/30 animate-pulse rounded mx-auto mb-0.5" />
-                <div className="h-3 w-20 bg-slate-700/30 animate-pulse rounded mx-auto" />
-              </CardContent>
-            </Card>
-          ))}
+        <div className="mb-8">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl h-[98px] overflow-hidden">
+            <CardContent className="p-3 h-full flex items-center justify-center">
+              <div className="text-slate-500 text-xs">Loading statistics...</div>
+            </CardContent>
+          </div>
         </div>
-      ) : (
-        <motion.div
-          className="grid grid-cols-3 gap-4 mb-8"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.18 }}
-        >
-          {[
-            { icon: 'BookOpen', value: stats.knowledge, label: 'Knowledge', delay: 0 },
-            { icon: 'Users', value: stats.circles, label: 'Circles', delay: 0.05 },
-            { icon: 'CheckCircle', value: stats.checkIns, label: "Check-In's", delay: 0.1 }
-          ].map((stat) => (
-            <motion.div
-              key={stat.label}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.18, delay: stat.delay }}
-            >
-              <Card className="bg-slate-800/30 backdrop-blur-sm border-slate-700 h-[98px] overflow-hidden">
-                <CardContent className="p-3 h-full flex flex-col justify-center text-center">
-                  <div className="flex justify-center mb-1.5">
-                    <ConfiguredIcon 
-                      iconName={stat.icon}
-                      iconConfig={iconConfigs[stat.icon]}
-                      size="w-5 h-5"
+      ) : sortedStatConfigs.length > 0 ? (
+        <>
+          {/* Mobile Ansicht: Horizontales Scrollen */}
+          <motion.div
+            className="lg:hidden mb-8 relative"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="bg-transparent border-none p-0 m-0">
+              <div className="relative">
+                {showLeftArrow && (
+                  <button
+                    onClick={() => handleScroll('left')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll left"
+                  >
+                    <ConfiguredIcon
+                      iconName="ChevronLeft"
+                      iconConfig={iconConfigs['ChevronLeft']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
                     />
-                  </div>
-                  <div className="text-lg font-bold text-white">{stat.value}</div>
-                  <div className="text-slate-400 text-xs">{stat.label}</div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          ))}
-        </motion.div>
+                  </button>
+                )}
+
+                <div
+                  ref={mobileStatsScrollRef}
+                  className="flex gap-3 overflow-x-auto px-3 py-3 snap-x snap-mandatory scrollbar-hide"
+                  style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                >
+                  {renderStatCardsMobile()}
+                </div>
+
+                {showRightArrow && (
+                  <button
+                    onClick={() => handleScroll('right')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-full p-2 hover:bg-slate-800 transition-colors"
+                    aria-label="Scroll right"
+                  >
+                    <ConfiguredIcon
+                      iconName="ChevronRight"
+                      iconConfig={iconConfigs['ChevronRight']}
+                      size="w-4 h-4"
+                      fallbackColor="text-slate-400"
+                    />
+                  </button>
+                )}
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Desktop Ansicht: Grid */}
+          <motion.div
+            className="hidden lg:grid mb-8"
+            style={{
+              gridTemplateColumns: `repeat(${sortedStatConfigs.length}, 1fr)`,
+              gap: '1rem'
+            }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            {renderStatCardsGridDesktop()}
+          </motion.div>
+        </>
+      ) : (
+        <div className="mb-8 text-center py-8 text-slate-400">
+          <p>No stats configured for Learning. Visit <Link to={createPageUrl('StatsAdmin')} className="text-orange-400 hover:text-orange-300 underline">Stats Admin</Link> to configure.</p>
+        </div>
       )}
       
       {/* Action Buttons */}
